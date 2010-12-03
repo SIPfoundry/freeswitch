@@ -93,7 +93,7 @@ BuildRequires: perl
 BuildRequires: perl-ExtUtils-Embed
 %endif
 BuildRequires: pkgconfig
-%if %{_vendor} == redhat && 0%{fedora} <= 6
+%if %{_vendor} == redhat && 0%{?fedora} <= 6
 BuildRequires: termcap
 %endif
 BuildRequires: unixODBC-devel
