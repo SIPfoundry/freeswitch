@@ -43,7 +43,7 @@ Summary:      	FreeSWITCH open source telephony platform
 License:      	MPL
 Group:        	Productivity/Telephony/Servers
 Version:      	1.0.7
-Release:      	trunk
+Release:      	%{?buildno:%buildno}%{!?buildno:trunk}
 URL:          	http://www.freeswitch.org/
 Packager:     	Michal Bielicki
 Vendor:       	http://www.freeswitch.org/
