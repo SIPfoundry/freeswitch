@@ -1,4 +1,10 @@
-freeswitch_SRPM = freeswitch-1.0.7-trunk.src.rpm
+# format:  ${number of commits past tag}.${refid of HEAD}
+freeswitch_PACKAGE_REVISION = $(shell \
+	cd $(SRC)/$(PROJ); \
+	$(SRC)/config/git-version-gen .version | \
+	sed 's/\([0-9.]\+\)-\([0-9]\+\)-\([0-9a-f]\+\)/\2.\3/g')
+
+freeswitch_SRPM = freeswitch-1.0.7-$(freeswitch_PACKAGE_REVISION).src.rpm
 freeswitch_SPEC = $(SRC)/$(PROJ)/freeswitch.spec
 freeswitch_SOURCES = $(SRC)/$(PROJ)/freeswitch-1.0.7.tar.bz2 \
 	celt-0.7.1.tar.gz \
@@ -12,6 +18,9 @@ freeswitch_SOURCES = $(SRC)/$(PROJ)/freeswitch-1.0.7.tar.bz2 \
 	sphinxbase-0.4.99-20091212.tar.gz \
 	communicator_semi_6000_20080321.tar.gz \
 	libmemcached-0.32.tar.gz
+
+freeswitch_SRPM_DEFS = --define "buildno $(freeswitch_PACKAGE_REVISION)"
+freeswitch_RPM_DEFS = --define="buildno $(freeswitch_PACKAGE_REVISION)"
 
 # we could, but we don't these targets. FS doesn't support running ./configure from anywhere but source root.
 freeswitch.autoreconf freeswitch.configure:;
