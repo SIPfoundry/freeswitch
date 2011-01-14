@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -31,7 +31,8 @@
  * this file does not exist!!!!
  *
  */
-
+#define SPANDSP_NO_TIFF 1
+#include "spandsp.h"
 #include "switch_profile.h"
 
 #ifndef WIN32
@@ -135,6 +136,7 @@ struct switch_core_session {
 	switch_mutex_t *frame_read_mutex;
 
 	switch_thread_rwlock_t *rwlock;
+	switch_thread_rwlock_t *io_rwlock;
 
 	void *streams[SWITCH_MAX_STREAMS];
 	int stream_count;
@@ -168,6 +170,7 @@ struct switch_core_session {
 	switch_log_level_t loglevel;
 	uint32_t soft_lock;
 	switch_ivr_dmachine_t *dmachine;
+	plc_state_t *plc;
 };
 
 struct switch_media_bug {

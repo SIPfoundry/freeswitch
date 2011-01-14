@@ -1,6 +1,6 @@
 /*
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005/2006, Anthony Minessale II <anthmct@yahoo.com>
+ * Copyright (C) 2005/2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -17,7 +17,7 @@
  * The Original Code is FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
  *
  * The Initial Developer of the Original Code is
- * Anthony Minessale II <anthmct@yahoo.com>
+ * Anthony Minessale II <anthm@freeswitch.org>
  * Portions created by the Initial Developer are Copyright (C)
  * the Initial Developer. All Rights Reserved.
  *
@@ -1324,7 +1324,6 @@ static switch_call_cause_t channel_outgoing_channel(switch_core_session_t *sessi
 		caller_profile = tech_pvt->caller_profile;
 		caller_profile->destination_number = rdest;
 
-		switch_channel_set_flag(channel, CF_OUTBOUND);
 		switch_set_flag(tech_pvt, TFLAG_OUTBOUND);
 		switch_channel_set_state(channel, CS_INIT);
 		gsmopen_call(tech_pvt, rdest, 30);
@@ -1513,7 +1512,7 @@ static switch_status_t load_config(int reload_type)
 					hotline = val;
 				} else if (!strcasecmp(var, "dial_regex")) {
 					dial_regex = val;
-				} else if (!strcasecmp(var, "hold_music")) {
+				} else if (!strcasecmp(var, SWITCH_HOLD_MUSIC_VARIABLE)) {
 					hold_music = val;
 				} else if (!strcasecmp(var, "fail_dial_regex")) {
 					fail_dial_regex = val;

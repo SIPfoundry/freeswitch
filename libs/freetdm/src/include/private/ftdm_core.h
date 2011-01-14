@@ -143,7 +143,9 @@ extern "C" {
   \return true value if the object has the flags defined
 */
 #define ftdm_test_flag(obj, flag) ((obj)->flags & flag)
+/*!< Physical (IO) module specific flags */
 #define ftdm_test_pflag(obj, flag) ((obj)->pflags & flag)
+/*!< signaling module specific flags */
 #define ftdm_test_sflag(obj, flag) ((obj)->sflags & flag)
 
 #define ftdm_set_alarm_flag(obj, flag) (obj)->alarm_flags |= (flag)
@@ -190,17 +192,6 @@ extern "C" {
 
 #define ftdm_clear_sflag_locked(obj, flag) assert(obj->mutex != NULL); ftdm_mutex_lock(obj->mutex); (obj)->sflags &= ~(flag); ftdm_mutex_unlock(obj->mutex);
 
-#define ftdm_set_state(obj, s) ftdm_channel_set_state(__FILE__, __FUNCTION__, __LINE__, obj, s, 0);									\
-
-#define ftdm_set_state_locked(obj, s) \
-	do { \
-		ftdm_channel_lock(obj); \
-		ftdm_channel_set_state(__FILE__, __FUNCTION__, __LINE__, obj, s, 0);									\
-		ftdm_channel_unlock(obj); \
-	} while(0);
-
-#define ftdm_set_state_r(obj, s, r) r = ftdm_channel_set_state(__FILE__, __FUNCTION__, __LINE__, obj, s, 0);
-
 #ifdef _MSC_VER
 /* The while(0) below throws a conditional expression is constant warning */
 #pragma warning(disable:4127) 
@@ -222,8 +213,7 @@ extern "C" {
 
 #define ftdm_is_dtmf(key)  ((key > 47 && key < 58) || (key > 64 && key < 69) || (key > 96 && key < 101) || key == 35 || key == 42 || key == 87 || key == 119)
 
-#define FTDM_SPAN_IS_BRI(x)     ((x)->trunk_type == FTDM_TRUNK_BRI || (x)->trunk_type == FTDM_TRUNK_BRI_PTMP)
-
+#define FTDM_SPAN_IS_BRI(x)	((x)->trunk_type == FTDM_TRUNK_BRI || (x)->trunk_type == FTDM_TRUNK_BRI_PTMP)
 /*!
   \brief Copy flags from one arbitrary object to another
   \command dest the object to copy the flags to
@@ -343,29 +333,53 @@ typedef enum {
 	FTDM_TYPE_CHANNEL
 } ftdm_data_type_t;
 
-#ifdef FTDM_DEBUG_DTMF
-/* number of bytes for the circular buffer (5 seconds worth of audio) */
-#define DTMF_DEBUG_SIZE 8 * 5000
-/* number of 20ms cycles before timeout and close the debug dtmf file (5 seconds) */
-#define DTMF_DEBUG_TIMEOUT 250
+/* number of bytes for the IO dump circular buffer (5 seconds worth of audio by default) */
+#define FTDM_IO_DUMP_DEFAULT_BUFF_SIZE 8 * 5000
 typedef struct {
-	FILE *file;
-	char buffer[DTMF_DEBUG_SIZE];
+	char *buffer;
+	ftdm_size_t size;
 	int windex;
 	int wrapped;
-	int closetimeout;
+} ftdm_io_dump_t;
+
+/* number of interval cycles before timeout and close the debug dtmf file (5 seconds if interval is 20) */
+#define DTMF_DEBUG_TIMEOUT 250
+typedef struct {
+	uint8_t enabled;
+	uint8_t requested;
+	FILE *file;
+	int32_t closetimeout;
 	ftdm_mutex_t *mutex;
 } ftdm_dtmf_debug_t;
-#endif
+
+typedef enum {
+	FTDM_IOSTATS_ERROR_CRC		= (1 << 0),
+	FTDM_IOSTATS_ERROR_FRAME	= (1 << 1),
+	FTDM_IOSTATS_ERROR_ABORT 	= (1 << 2),
+	FTDM_IOSTATS_ERROR_FIFO 	= (1 << 3),
+	FTDM_IOSTATS_ERROR_DMA		= (1 << 4),
+	FTDM_IOSTATS_ERROR_QUEUE_THRES	= (1 << 5), /* Queue reached high threshold */
+	FTDM_IOSTATS_ERROR_QUEUE_FULL	= (1 << 6), /* Queue is full */
+} ftdm_iostats_error_type_t;
 
 typedef struct {
-	const char *file;
-	const char *func;
-	int line;
-	ftdm_channel_state_t state;
-	ftdm_channel_state_t last_state;
-	ftdm_time_t time;
-} ftdm_channel_history_entry_t;
+	struct {
+		uint32_t errors;
+		uint16_t flags;
+		uint8_t	 queue_size;	/* max queue size configured */
+		uint8_t	 queue_len;	/* Current number of elements in queue */
+		uint64_t packets;
+	} rx;
+
+	struct {
+		uint32_t errors;
+		uint16_t flags;
+		uint8_t  idle_packets;
+		uint8_t	 queue_size;	/* max queue size configured */
+		uint8_t	 queue_len;	/* Current number of elements in queue */
+		uint64_t packets;
+	} tx;
+} ftdm_channel_iostats_t;
 
 /* 2^8 table size, one for each byte (sample) value */
 #define FTDM_GAINS_TABLE_SIZE 256
@@ -379,7 +393,7 @@ struct ftdm_channel {
 	uint32_t extra_id;
 	ftdm_chan_type_t type;
 	ftdm_socket_t sockfd;
-	uint32_t flags;
+	uint64_t flags;
 	uint32_t pflags;
 	uint32_t sflags;
 	ftdm_alarm_flag_t alarm_flags;
@@ -390,9 +404,11 @@ struct ftdm_channel {
 	uint32_t native_interval;
 	uint32_t packet_len;
 	ftdm_channel_state_t state;
+	ftdm_state_status_t state_status;
 	ftdm_channel_state_t last_state;
 	ftdm_channel_state_t init_state;
-	ftdm_channel_history_entry_t history[10];
+	ftdm_channel_indication_t indication;
+	ftdm_state_history_entry_t history[10];
 	uint8_t hindex;
 	ftdm_mutex_t *mutex;
 	teletone_dtmf_detect_state_t dtmf_detect;
@@ -424,6 +440,7 @@ struct ftdm_channel {
 	ftdm_fsk_data_state_t fsk;
 	uint8_t fsk_buf[80];
 	uint32_t ring_count;
+	ftdm_polarity_t polarity;
 	/* Private I/O data. Do not touch unless you are an I/O module */
 	void *io_data;
 	/* Private signaling data. Do not touch unless you are a signaling module */
@@ -441,9 +458,13 @@ struct ftdm_channel {
 	int availability_rate;
 	void *user_private;
 	ftdm_timer_id_t hangup_timer;
-#ifdef FTDM_DEBUG_DTMF
+	ftdm_channel_iostats_t iostats;
 	ftdm_dtmf_debug_t dtmfdbg;
-#endif
+	ftdm_io_dump_t rxdump;
+	ftdm_io_dump_t txdump;
+	ftdm_interrupt_t *state_completed_interrupt; /*!< Notify when a state change is completed */
+	int32_t txdrops;
+	int32_t rxdrops;
 };
 
 struct ftdm_span {
@@ -458,6 +479,7 @@ struct ftdm_span {
 	ftdm_trunk_type_t trunk_type;
 	ftdm_analog_start_type_t start_type;
 	ftdm_signal_type_t signal_type;
+	uint32_t last_used_index;
 	/* Private signaling data. Do not touch unless you are a signaling module */
 	void *signal_data;
 	fio_signal_cb_t signal_cb;
@@ -468,6 +490,7 @@ struct ftdm_span {
 	teletone_multi_tone_t tone_finder[FTDM_TONEMAP_INVALID+1];
 	ftdm_channel_t *channels[FTDM_MAX_CHANNELS_SPAN+1];
 	fio_channel_outgoing_call_t outgoing_call;
+	fio_channel_send_msg_t send_msg;
 	fio_channel_set_sig_status_t set_channel_sig_status;
 	fio_channel_get_sig_status_t get_channel_sig_status;
 	fio_span_set_sig_status_t set_span_sig_status;
@@ -476,15 +499,16 @@ struct ftdm_span {
 	ftdm_span_start_t start;
 	ftdm_span_stop_t stop;
 	ftdm_channel_sig_read_t sig_read;
-	/* Private I/O data per span. Do not touch unless you are an I/O module */
-	void *io_data;
+	ftdm_channel_sig_write_t sig_write;
+	ftdm_channel_state_processor_t state_processor; /*!< This guy is called whenever state processing is required */
+	void *io_data; /*!< Private I/O data per span. Do not touch unless you are an I/O module */
 	char *type;
 	char *dtmf_hangup;
 	size_t dtmf_hangup_len;
 	ftdm_state_map_t *state_map;
 	ftdm_caller_data_t default_caller_data;
-	ftdm_queue_t *pendingchans;
-	ftdm_queue_t *pendingsignals;
+	ftdm_queue_t *pendingchans; /*!< Channels pending of state processing */
+	ftdm_queue_t *pendingsignals; /*!< Signals pending from being delivered to the user */
 	struct ftdm_span *next;
 };
 
@@ -531,11 +555,7 @@ FT_DECLARE(ftdm_status_t) ftdm_fsk_data_add_checksum(ftdm_fsk_data_state_t *stat
 FT_DECLARE(ftdm_status_t) ftdm_fsk_data_add_sdmf(ftdm_fsk_data_state_t *state, const char *date, char *number);
 FT_DECLARE(ftdm_status_t) ftdm_channel_send_fsk_data(ftdm_channel_t *ftdmchan, ftdm_fsk_data_state_t *fsk_data, float db_level);
 
-FT_DECLARE(ftdm_status_t) ftdm_channel_set_state(const char *file, const char *func, int line,
-		ftdm_channel_t *ftdmchan, ftdm_channel_state_t state, int wait);
-
 FT_DECLARE(ftdm_status_t) ftdm_span_load_tones(ftdm_span_t *span, const char *mapname);
-FT_DECLARE(ftdm_time_t) ftdm_current_time_in_ms(void);
 
 FT_DECLARE(ftdm_status_t) ftdm_channel_use(ftdm_channel_t *ftdmchan);
 
@@ -547,8 +567,6 @@ FT_DECLARE(void) print_hex_bytes(uint8_t *data, ftdm_size_t dlen, char *buf, ftd
 
 FT_DECLARE_NONSTD(int) ftdm_hash_equalkeys(void *k1, void *k2);
 FT_DECLARE_NONSTD(uint32_t) ftdm_hash_hashfromstring(void *ky);
-
-FT_DECLARE(ftdm_status_t) ftdm_channel_complete_state(ftdm_channel_t *ftdmchan);
 
 FT_DECLARE(int) ftdm_load_modules(void);
 
@@ -562,10 +580,10 @@ FT_DECLARE(void) ftdm_channel_rotate_tokens(ftdm_channel_t *ftdmchan);
 FT_DECLARE(int) ftdm_load_module(const char *name);
 FT_DECLARE(int) ftdm_load_module_assume(const char *name);
 FT_DECLARE(int) ftdm_vasprintf(char **ret, const char *fmt, va_list ap);
-FT_DECLARE(ftdm_status_t) ftdm_channel_done(ftdm_channel_t *ftdmchan);
 
 FT_DECLARE(ftdm_status_t) ftdm_span_close_all(void);
 FT_DECLARE(ftdm_status_t) ftdm_channel_open_chan(ftdm_channel_t *ftdmchan);
+FT_DECLARE(void) ftdm_ack_indication(ftdm_channel_t *ftdmchan, ftdm_channel_indication_t indication, ftdm_status_t status);
 
 /*! 
  * \brief Retrieves an event from the span
@@ -637,9 +655,20 @@ FT_DECLARE(void) ftdm_channel_clear_detected_tones(ftdm_channel_t *ftdmchan);
 
 #define ftdm_channel_lock(chan) ftdm_mutex_lock(chan->mutex)
 #define ftdm_channel_unlock(chan) ftdm_mutex_unlock(chan->mutex)
+
+#define ftdm_log_throttle(level, ...) \
+	time_current_throttle_log = ftdm_current_time_in_ms(); \
+	if (time_current_throttle_log - time_last_throttle_log > FTDM_THROTTLE_LOG_INTERVAL) {\
+		ftdm_log(level, __VA_ARGS__); \
+		time_last_throttle_log = time_current_throttle_log; \
+	} 
+
 #define ftdm_log_chan_ex(fchan, file, func, line, level, format, ...) ftdm_log(file, func, line, level, "[s%dc%d][%d:%d] " format, fchan->span_id, fchan->chan_id, fchan->physical_span_id, fchan->physical_chan_id, __VA_ARGS__)
 #define ftdm_log_chan(fchan, level, format, ...) ftdm_log(level, "[s%dc%d][%d:%d] " format, fchan->span_id, fchan->chan_id, fchan->physical_span_id, fchan->physical_chan_id, __VA_ARGS__)
 #define ftdm_log_chan_msg(fchan, level, msg) ftdm_log(level, "[s%dc%d][%d:%d] " msg, fchan->span_id, fchan->chan_id, fchan->physical_span_id, fchan->physical_chan_id)
+
+#define ftdm_log_chan_throttle(fchan, level, format, ...) ftdm_log_throttle(level, "[s%dc%d][%d:%d] " format, fchan->span_id, fchan->chan_id, fchan->physical_span_id, fchan->physical_chan_id, __VA_ARGS__)
+#define ftdm_log_chan_msg_throttle(fchan, level, format, ...) ftdm_log_throttle(level, "[s%dc%d][%d:%d] " format, fchan->span_id, fchan->chan_id, fchan->physical_span_id, fchan->physical_chan_id, __VA_ARGS__)
 
 #define ftdm_span_lock(span) ftdm_mutex_lock(span->mutex)
 #define ftdm_span_unlock(span) ftdm_mutex_unlock(span->mutex)
@@ -653,50 +682,6 @@ static __inline__ void ftdm_abort(void)
 #else
 	abort();
 #endif
-}
-
-static __inline__ void ftdm_set_state_all(ftdm_span_t *span, ftdm_channel_state_t state)
-{
-	uint32_t j;
-	ftdm_mutex_lock(span->mutex);
-	for(j = 1; j <= span->chan_count; j++) {
-		if (!FTDM_IS_DCHAN(span->channels[j])) {
-			ftdm_set_state_locked((span->channels[j]), state);
-		}
-	}
-	ftdm_mutex_unlock(span->mutex);
-}
-
-static __inline__ int ftdm_check_state_all(ftdm_span_t *span, ftdm_channel_state_t state)
-{
-	uint32_t j;
-	for(j = 1; j <= span->chan_count; j++) {
-		if (span->channels[j]->state != state || ftdm_test_flag(span->channels[j], FTDM_CHANNEL_STATE_CHANGE)) {
-			return 0;
-		}
-	}
-
-	return 1;
-}
-
-static __inline__ void ftdm_set_flag_all(ftdm_span_t *span, uint32_t flag)
-{
-	uint32_t j;
-	ftdm_mutex_lock(span->mutex);
-	for(j = 1; j <= span->chan_count; j++) {
-		ftdm_set_flag_locked((span->channels[j]), flag);
-	}
-	ftdm_mutex_unlock(span->mutex);
-}
-
-static __inline__ void ftdm_clear_flag_all(ftdm_span_t *span, uint32_t flag)
-{
-	uint32_t j;
-	ftdm_mutex_lock(span->mutex);
-	for(j = 1; j <= span->chan_count; j++) {
-		ftdm_clear_flag_locked((span->channels[j]), flag);
-	}
-	ftdm_mutex_unlock(span->mutex);
 }
 
 static __inline__ int16_t ftdm_saturated_add(int16_t sample1, int16_t sample2)

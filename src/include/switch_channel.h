@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -256,6 +256,8 @@ SWITCH_DECLARE(switch_status_t) switch_channel_set_variable_partner_var_check(sw
 																			  const char *varname, const char *value, switch_bool_t var_check);
 SWITCH_DECLARE(const char *) switch_channel_get_variable_partner(switch_channel_t *channel, const char *varname);
 
+SWITCH_DECLARE(const char *) switch_channel_get_hold_music(switch_channel_t *channel);
+SWITCH_DECLARE(const char *) switch_channel_get_hold_music_partner(switch_channel_t *channel);
 
 #define switch_channel_set_variable(_channel, _var, _val) switch_channel_set_variable_var_check(_channel, _var, _val, SWITCH_TRUE)
 #define switch_channel_set_variable_partner(_channel, _var, _val) switch_channel_set_variable_partner_var_check(_channel, _var, _val, SWITCH_TRUE)
@@ -312,6 +314,8 @@ SWITCH_DECLARE(switch_status_t) switch_channel_caller_extension_masquerade(switc
 */
 SWITCH_DECLARE(void) switch_channel_set_caller_extension(switch_channel_t *channel, switch_caller_extension_t *caller_extension);
 
+SWITCH_DECLARE(void) switch_channel_sort_cid(switch_channel_t *channel, switch_bool_t in);
+
 /*!
   \brief Retrieve caller extension from a given channel
   \param channel channel to retrieve extension from
@@ -342,6 +346,7 @@ SWITCH_DECLARE(void) switch_channel_set_cap_value(switch_channel_t *channel, swi
 
 SWITCH_DECLARE(void) switch_channel_clear_cap(switch_channel_t *channel, switch_channel_cap_t cap);
 SWITCH_DECLARE(uint32_t) switch_channel_test_cap(switch_channel_t *channel, switch_channel_cap_t cap);
+SWITCH_DECLARE(uint32_t) switch_channel_test_cap_partner(switch_channel_t *channel, switch_channel_cap_t cap);
 
 /*!
   \brief Set given flag(s) on a given channel's bridge partner

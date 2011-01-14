@@ -16,14 +16,20 @@
   </cli-keybindings> 
   
   <default-ptimes>
-    <!-- set this to overide the 20ms assumption of various codecs in the sdp with no ptime defined -->
+    <!-- set this to override the 20ms assumption of various codecs in the sdp with no ptime defined -->
     <!--<codec name="G729" ptime="40"/>-->
   </default-ptimes>
   
   <settings>
     <!--Colorize the Console -->
     <param name="colorize-console" value="true"/>
-    <!--Most channels to allow at once -->
+    <!--
+	Max number of sessions to allow at any given time.
+	
+	NOTICE: If you're driving 28 T1's in a single box you should set this to 644*2 or 1288
+	this will ensure you're able to use the entire DS3 without a problem.  Otherwise you'll
+	be 144 channels short of always filling that DS3 up which can translate into waste.
+    -->
     <param name="max-sessions" value="1000"/>
     <!--Most channels to create per second -->
     <param name="sessions-per-second" value="30"/>

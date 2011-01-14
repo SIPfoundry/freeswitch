@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -832,6 +832,8 @@ void sofia_glue_attach_private(switch_core_session_t *session, sofia_profile_t *
 	switch_channel_set_cap(tech_pvt->channel, CC_MEDIA_ACK);
 	switch_channel_set_cap(tech_pvt->channel, CC_BYPASS_MEDIA);
 	switch_channel_set_cap(tech_pvt->channel, CC_PROXY_MEDIA);
+	switch_channel_set_cap(tech_pvt->channel, CC_JITTERBUFFER);
+	switch_channel_set_cap(tech_pvt->channel, CC_FS_RTP);
 
 	switch_core_session_set_private(session, tech_pvt);
 
@@ -2342,7 +2344,7 @@ switch_status_t sofia_glue_do_invite(switch_core_session_t *session)
 		nua_invite(tech_pvt->nh,
 				   NUTAG_AUTOANSWER(0),
 				   NUTAG_SESSION_TIMER(session_timeout),
-				   TAG_IF(session_timeout, NUTAG_SESSION_REFRESHER(nua_remote_refresher)),
+				   NUTAG_SESSION_REFRESHER(session_timeout ? nua_local_refresher : nua_no_refresher),
 				   TAG_IF(sofia_test_flag(tech_pvt, TFLAG_RECOVERED), NUTAG_INVITE_TIMER(UINT_MAX)),
 				   TAG_IF(invite_full_from, SIPTAG_FROM_STR(invite_full_from)),
 				   TAG_IF(invite_full_to, SIPTAG_TO_STR(invite_full_to)),
@@ -2669,10 +2671,12 @@ switch_status_t sofia_glue_tech_set_codec(private_object_t *tech_pvt, int force)
 							  tech_pvt->rm_encoding, 
 							  tech_pvt->codec_ms,
 							  tech_pvt->rm_rate);
-
+			
+			switch_yield(tech_pvt->read_impl.microseconds_per_packet);
 			switch_core_session_lock_codec_write(tech_pvt->session);
 			switch_core_session_lock_codec_read(tech_pvt->session);
 			resetting = 1;
+			switch_yield(tech_pvt->read_impl.microseconds_per_packet);
 			switch_core_codec_destroy(&tech_pvt->read_codec);
 			switch_core_codec_destroy(&tech_pvt->write_codec);
 		} else {
@@ -2691,8 +2695,8 @@ switch_status_t sofia_glue_tech_set_codec(private_object_t *tech_pvt, int force)
 							   SWITCH_CODEC_FLAG_ENCODE | SWITCH_CODEC_FLAG_DECODE | tech_pvt->profile->codec_flags,
 							   NULL, switch_core_session_get_pool(tech_pvt->session)) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), SWITCH_LOG_ERROR, "Can't load codec?\n");
-		switch_goto_status(SWITCH_STATUS_FALSE, end);
 		switch_channel_hangup(tech_pvt->channel, SWITCH_CAUSE_INCOMPATIBLE_DESTINATION);
+		switch_goto_status(SWITCH_STATUS_FALSE, end);
 	}
 
 	if (switch_core_codec_init_with_bitrate(&tech_pvt->write_codec,
@@ -3150,20 +3154,39 @@ switch_status_t sofia_glue_activate_rtp(private_object_t *tech_pvt, switch_rtp_f
 			}
 		}
 
-		if ((val = switch_channel_get_variable(tech_pvt->channel, "jitterbuffer_msec"))) {
-			int len = atoi(val);
+		if ((val = switch_channel_get_variable(tech_pvt->channel, "jitterbuffer_msec")) || (val = tech_pvt->profile->jb_msec)) {
+			int jb_msec = atoi(val);
+			int maxlen = 0;
+			char *p;
 
-			if (len < 100 || len > 1000) {
+			if ((p = strchr(val, ':'))) {
+				p++;
+				maxlen = atoi(p);
+			}
+
+			if (jb_msec < 20 || jb_msec > 10000) {
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), SWITCH_LOG_ERROR,
-								  "Invalid Jitterbuffer spec [%d] must be between 100 and 1000\n", len);
+								  "Invalid Jitterbuffer spec [%d] must be between 20 and 10000\n", jb_msec);
 			} else {
-				int qlen;
+				int qlen, maxqlen = 50;
+				
+				qlen = jb_msec / (tech_pvt->read_impl.microseconds_per_packet / 1000);
 
-				qlen = len / (tech_pvt->read_impl.microseconds_per_packet / 1000);
+				if (maxlen) {
+					maxqlen = maxlen / (tech_pvt->read_impl.microseconds_per_packet / 1000);
+				}
 
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), SWITCH_LOG_DEBUG, "Setting Jitterbuffer to %dms (%d frames)\n", len,
-								  qlen);
-				switch_rtp_activate_jitter_buffer(tech_pvt->rtp_session, qlen);
+				if (switch_rtp_activate_jitter_buffer(tech_pvt->rtp_session, qlen, maxqlen,
+													  tech_pvt->read_impl.samples_per_packet, 
+													  tech_pvt->read_impl.samples_per_second) == SWITCH_STATUS_SUCCESS) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), 
+									  SWITCH_LOG_DEBUG, "Setting Jitterbuffer to %dms (%d frames)\n", jb_msec, qlen);
+					switch_channel_set_flag(tech_pvt->channel, CF_JITTERBUFFER);
+				} else {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), 
+									  SWITCH_LOG_WARNING, "Error Setting Jitterbuffer to %dms (%d frames)\n", jb_msec, qlen);
+				}
+				
 			}
 		}
 
@@ -3527,13 +3550,53 @@ void sofia_glue_set_r_sdp_codec_string(switch_core_session_t *session, const cha
 					}
 
 					if (match) {
-						if (ptime > 0) {
-							switch_snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ",%s@%uh@%di", imp->iananame, (unsigned int) map->rm_rate,
-											ptime);
-						} else {
-							switch_snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ",%s@%uh", imp->iananame, (unsigned int) map->rm_rate);
+						int codec_ms = ptime;
+						uint32_t map_bit_rate = 0;
+						char ptstr[20] = "";
+						char ratestr[20] = "";
+						char bitstr[20] = "";
+						switch_codec_fmtp_t codec_fmtp = { 0 };
+						
+						if (!codec_ms) {
+							codec_ms = switch_default_ptime(map->rm_encoding, map->rm_pt);
 						}
-						already_did[imp->ianacode] = 1;
+
+						map_bit_rate = switch_known_bitrate(map->rm_pt);
+				
+						if (!ptime && !strcasecmp(map->rm_encoding, "g723")) {
+							ptime = codec_ms = 30;
+						}
+				
+						if (zstr(map->rm_fmtp)) {
+							if (!strcasecmp(map->rm_encoding, "ilbc")) {
+								ptime = codec_ms = 30;
+								map_bit_rate = 13330;
+							}
+						} else {
+							if ((switch_core_codec_parse_fmtp(map->rm_encoding, map->rm_fmtp, map->rm_rate, &codec_fmtp)) == SWITCH_STATUS_SUCCESS) {
+								if (codec_fmtp.bits_per_second) {
+									map_bit_rate = codec_fmtp.bits_per_second;
+								}
+								if (codec_fmtp.microseconds_per_packet) {
+									codec_ms = (codec_fmtp.microseconds_per_packet / 1000);
+								}
+							}
+						}
+
+						if (map->rm_rate) {
+							switch_snprintf(ratestr, sizeof(ratestr), "@%uh", (unsigned int) map->rm_rate);
+						}
+
+						if (codec_ms) {
+							switch_snprintf(ptstr, sizeof(ptstr), "@%di", codec_ms);
+						}
+
+						if (map_bit_rate) {
+							switch_snprintf(bitstr, sizeof(bitstr), "@%db", map_bit_rate);
+						}
+
+						switch_snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ",%s%s%s%s", map->rm_encoding, ratestr, ptstr, bitstr);
+						
 						break;
 					}
 				}
@@ -3640,7 +3703,7 @@ void sofia_glue_toggle_hold(private_object_t *tech_pvt, int sendonly)
 				switch_rtp_set_max_missed_packets(tech_pvt->rtp_session, tech_pvt->max_missed_hold_packets);
 			}
 
-			if (!(stream = switch_channel_get_variable(tech_pvt->channel, SWITCH_HOLD_MUSIC_VARIABLE))) {
+			if (!(stream = switch_channel_get_hold_music(tech_pvt->channel))) {
 				stream = tech_pvt->profile->hold_music;
 			}
 
@@ -3732,6 +3795,14 @@ static switch_t38_options_t *tech_process_udptl(private_object_t *tech_pvt, sdp_
 
 	if (!t38_options) {
 		t38_options = switch_core_session_alloc(tech_pvt->session, sizeof(switch_t38_options_t));
+
+		// set some default value
+		t38_options->T38FaxVersion = 0;
+		t38_options->T38MaxBitRate = 9600;
+		t38_options->T38FaxRateManagement = switch_core_session_strdup(tech_pvt->session, "transferredTCF");
+		t38_options->T38FaxUdpEC = switch_core_session_strdup(tech_pvt->session, "t38UDPRedundancy");
+		t38_options->T38FaxMaxBuffer = 500;
+		t38_options->T38FaxMaxDatagram = 500;
 	}
 
 	t38_options->remote_port = (switch_port_t)m->m_port;
@@ -4347,6 +4418,7 @@ uint8_t sofia_glue_negotiate_sdp(switch_core_session_t *session, const char *r_s
 				if (zstr(map->rm_fmtp)) {
 					if (!strcasecmp(map->rm_encoding, "ilbc")) {
 						ptime = codec_ms = 30;
+						map_bit_rate = 13330;
 					}
 				} else {
 					if ((switch_core_codec_parse_fmtp(map->rm_encoding, map->rm_fmtp, map->rm_rate, &codec_fmtp)) == SWITCH_STATUS_SUCCESS) {
@@ -4358,8 +4430,6 @@ uint8_t sofia_glue_negotiate_sdp(switch_core_session_t *session, const char *r_s
 						}
 					}
 				}
-				
-				
 
 				for (i = first; i < last && i < tech_pvt->num_codecs; i++) {
 					const switch_codec_implementation_t *imp = tech_pvt->codecs[i];
@@ -4370,7 +4440,7 @@ uint8_t sofia_glue_negotiate_sdp(switch_core_session_t *session, const char *r_s
 					}
 
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Audio Codec Compare [%s:%d:%u:%d:%u]/[%s:%d:%u:%d:%u]\n",
-									  rm_encoding, map->rm_pt, (int) map->rm_rate, ptime, map_bit_rate,
+									  rm_encoding, map->rm_pt, (int) map->rm_rate, codec_ms, map_bit_rate,
 									  imp->iananame, imp->ianacode, codec_rate, imp->microseconds_per_packet / 1000, bit_rate);
 					if ((zstr(map->rm_encoding) || (tech_pvt->profile->ndlb & PFLAG_NDLB_ALLOW_BAD_IANANAME)) && map->rm_pt < 96) {
 						match = (map->rm_pt == imp->ianacode) ? 1 : 0;
@@ -4659,8 +4729,8 @@ void sofia_glue_pass_sdp(private_object_t *tech_pvt, char *sdp)
 		switch_channel_set_variable(other_channel, SWITCH_B_SDP_VARIABLE, sdp);
 
 		if (!sofia_test_flag(tech_pvt, TFLAG_CHANGE_MEDIA) && !sofia_test_flag(tech_pvt, TFLAG_RECOVERING) &&
-			(switch_channel_test_flag(other_channel, CF_OUTBOUND) &&
-			 switch_channel_test_flag(tech_pvt->channel, CF_OUTBOUND) && switch_channel_test_flag(tech_pvt->channel, CF_PROXY_MODE))) {
+			(switch_channel_direction(other_channel) == SWITCH_CALL_DIRECTION_OUTBOUND &&
+ switch_channel_direction(tech_pvt->channel) == SWITCH_CALL_DIRECTION_OUTBOUND && switch_channel_test_flag(tech_pvt->channel, CF_PROXY_MODE))) {
 			switch_ivr_nomedia(val, SMF_FORCE);
 			sofia_set_flag_locked(tech_pvt, TFLAG_CHANGE_MEDIA);
 		}
@@ -5032,8 +5102,19 @@ static int recover_callback(void *pArg, int argc, char **argv, char **columnName
 		const char *port = switch_channel_get_variable(channel, SWITCH_LOCAL_MEDIA_PORT_VARIABLE);
 		const char *r_ip = switch_channel_get_variable(channel, SWITCH_REMOTE_MEDIA_IP_VARIABLE);
 		const char *r_port = switch_channel_get_variable(channel, SWITCH_REMOTE_MEDIA_PORT_VARIABLE);
+		const char *use_uuid;
 
 		sofia_set_flag(tech_pvt, TFLAG_RECOVERING);
+
+		if ((use_uuid = switch_channel_get_variable(channel, "origination_uuid"))) {
+			if (switch_core_session_set_uuid(session, use_uuid) == SWITCH_STATUS_SUCCESS) {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s set UUID=%s\n", switch_channel_get_name(channel),
+								  use_uuid);
+			} else {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "%s set UUID=%s FAILED\n",
+								  switch_channel_get_name(channel), use_uuid);
+			}
+		}
 
 		if (!switch_channel_test_flag(channel, CF_PROXY_MODE) && ip && port) {
 			const char *tmp;
@@ -6025,6 +6106,19 @@ void sofia_glue_tech_simplify(private_object_t *tech_pvt)
 	}
 }
 
+void sofia_glue_pause_jitterbuffer(switch_core_session_t *session, switch_bool_t on)
+{
+	switch_core_session_message_t *msg;
+	msg = switch_core_session_alloc(session, sizeof(*msg));
+	MESSAGE_STAMP_FFL(msg);
+	msg->message_id = SWITCH_MESSAGE_INDICATE_JITTER_BUFFER;
+	msg->string_arg = switch_core_session_strdup(session, on ? "pause" : "resume");
+	msg->from = __FILE__;
+
+	switch_core_session_queue_message(session, msg);
+}
+
+
 void sofia_glue_build_vid_refresh_message(switch_core_session_t *session, const char *pl)
 {
 	switch_core_session_message_t *msg;
@@ -6094,8 +6188,139 @@ void sofia_glue_parse_rtp_bugs(uint32_t *flag_pole, const char *str)
 	if (switch_stristr("~NEVER_SEND_MARKER", str)) {
 		*flag_pole &= ~RTP_BUG_NEVER_SEND_MARKER;
 	}
+
+	if (switch_stristr("IGNORE_DTMF_DURATION", str)) {
+		*flag_pole |= RTP_BUG_IGNORE_DTMF_DURATION;
+	}
+
+	if (switch_stristr("~IGNORE_DTMF_DURATION", str)) {
+		*flag_pole &= ~RTP_BUG_IGNORE_DTMF_DURATION;
+	}
 }
 
+char *sofia_glue_gen_contact_str(sofia_profile_t *profile, sip_t const *sip, sofia_nat_parse_t *np)
+{
+	char *contact_str = NULL;
+	const char *contact_host, *contact_user;
+	sip_contact_t const *contact;
+	char *port;
+	const char *display = "\"user\"";
+	char new_port[25] = "";
+	sofia_nat_parse_t lnp = { { 0 } };
+	const char *ipv6;
+	sip_from_t const *from;
+
+	if (!sip || !sip->sip_contact || !sip->sip_contact->m_url) {
+		return NULL;
+	}
+
+	from = sip->sip_from;
+	contact = sip->sip_contact;
+
+	if (!np) {
+		np = &lnp;
+	}
+
+	sofia_glue_get_addr(nua_current_request(profile->nua), np->network_ip, sizeof(np->network_ip), &np->network_port);
+	
+	if (sofia_glue_check_nat(profile, np->network_ip)) {
+		np->is_auto_nat = 1;
+	}
+
+	port = (char *) contact->m_url->url_port;
+	contact_host = sip->sip_contact->m_url->url_host;
+	contact_user = sip->sip_contact->m_url->url_user;
+
+	display = contact->m_display;
+
+
+	if (zstr(display)) {
+		if (from) {
+			display = from->a_display;
+			if (zstr(display)) {
+				display = "\"user\"";
+			}
+		}
+	} else {
+		display = "\"user\"";
+	}
+
+	if (sofia_test_pflag(profile, PFLAG_AGGRESSIVE_NAT_DETECTION)) {
+		if (sip->sip_via) {
+			const char *v_port = sip->sip_via->v_port;
+			const char *v_host = sip->sip_via->v_host;
+
+			if (v_host && sip->sip_via->v_received) {
+				np->is_nat = "via received";
+			} else if (v_host && strcmp(np->network_ip, v_host)) {
+				np->is_nat = "via host";
+			} else if (v_port && atoi(v_port) != np->network_port) {
+				np->is_nat = "via port";
+			}
+		}
+	}
+
+	if (!np->is_nat && sip && sip->sip_via && sip->sip_via->v_port &&
+		atoi(sip->sip_via->v_port) == 5060 && np->network_port != 5060 ) {
+		np->is_nat = "via port";
+	}
+
+	if (!np->is_nat && profile->nat_acl_count) {
+		uint32_t x = 0;
+		int ok = 1;
+		char *last_acl = NULL;
+
+		if (!zstr(contact_host)) {
+			for (x = 0; x < profile->nat_acl_count; x++) {
+				last_acl = profile->nat_acl[x];
+				if (!(ok = switch_check_network_list_ip(contact_host, last_acl))) {
+					break;
+				}
+			}
+
+			if (ok) {
+				np->is_nat = last_acl;
+			}
+		}
+	}
+
+	if (np->is_nat && profile->local_network && switch_check_network_list_ip(np->network_ip, profile->local_network)) {
+		if (profile->debug) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "IP %s is on local network, not seting NAT mode.\n", np->network_ip);
+		}
+		np->is_nat = NULL;
+	}
+
+	if (zstr(contact_host)) {
+		np->is_nat = "No contact host";
+	}
+
+	if (np->is_nat) {
+		contact_host = np->network_ip;
+		switch_snprintf(new_port, sizeof(new_port), ":%d", np->network_port);
+		port = NULL;
+	}
+
+
+	if (port) {
+		switch_snprintf(new_port, sizeof(new_port), ":%s", port);
+	}
+
+	ipv6 = strchr(contact_host, ':');
+	if (contact->m_url->url_params) {
+		contact_str = switch_mprintf("%s <sip:%s@%s%s%s%s;%s>%s",
+									 display, contact->m_url->url_user,
+									 ipv6 ? "[" : "",
+									 contact_host, ipv6 ? "]" : "", new_port, contact->m_url->url_params, np->is_nat ? ";fs_nat=yes" : "");
+	} else {
+		contact_str = switch_mprintf("%s <sip:%s@%s%s%s%s>%s",
+									 display,
+									 contact->m_url->url_user, ipv6 ? "[" : "", contact_host, ipv6 ? "]" : "", new_port, np->is_nat ? ";fs_nat=yes" : "");
+	}
+
+		
+	return contact_str;
+}
 
 
 

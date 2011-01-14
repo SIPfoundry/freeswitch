@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -100,7 +100,7 @@ static void send_display(switch_core_session_t *session, switch_core_session_t *
 	caller_channel = switch_core_session_get_channel(session);
 	caller_profile = switch_channel_get_caller_profile(caller_channel);
 	
-	if (switch_channel_direction(caller_channel) == SWITCH_CALL_DIRECTION_OUTBOUND) {
+	if (switch_channel_direction(caller_channel) == SWITCH_CALL_DIRECTION_OUTBOUND && !switch_channel_test_flag(caller_channel, CF_DIALPLAN)) {
 		name = caller_profile->callee_id_name;
 		number = caller_profile->callee_id_number;
 
@@ -315,6 +315,7 @@ static void *audio_bridge_thread(switch_thread_t *thread, void *obj)
 		
 		if (read_frame_count > DEFAULT_LEAD_FRAMES && switch_channel_media_ack(chan_a) && switch_core_session_private_event_count(session_a)) {
 			switch_channel_set_flag(chan_b, CF_SUSPEND);
+			msg.numeric_arg = 42;
 			msg.string_arg = data->b_uuid;
 			msg.message_id = SWITCH_MESSAGE_INDICATE_UNBRIDGE;
 			msg.from = __FILE__;
@@ -348,20 +349,10 @@ static void *audio_bridge_thread(switch_thread_t *thread, void *obj)
 		if (read_frame_count > DEFAULT_LEAD_FRAMES && switch_channel_media_ack(chan_a)) {
 			
 			if (exec_app) {
-				switch_event_t *execute_event;
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session_a), SWITCH_LOG_DEBUG, "%s Bridge execute app %s(%s)\n", 
 								  switch_channel_get_name(chan_a), exec_app, exec_data);
 
-				if (switch_event_create(&execute_event, SWITCH_EVENT_COMMAND) == SWITCH_STATUS_SUCCESS) {
-					switch_event_add_header_string(execute_event, SWITCH_STACK_BOTTOM, "call-command", "execute");
-					switch_event_add_header_string(execute_event, SWITCH_STACK_BOTTOM, "execute-app-name", exec_app);
-					if (exec_data) {
-						switch_event_add_header_string(execute_event, SWITCH_STACK_BOTTOM, "execute-app-arg", exec_data);
-					}
-					//switch_event_add_header(execute_event, SWITCH_STACK_BOTTOM, "lead-frames", "%d", 5);
-					switch_event_add_header_string(execute_event, SWITCH_STACK_BOTTOM, "event-lock", "true");
-					switch_core_session_queue_private_event(session_a, &execute_event, SWITCH_FALSE);
-				}
+				switch_core_session_execute_application_async(session_a, exec_app, exec_data);
 				exec_app = exec_data = NULL;
 			}
 
@@ -443,19 +434,24 @@ static void *audio_bridge_thread(switch_thread_t *thread, void *obj)
 
 		if (ans_a != ans_b) {
 			switch_channel_t *un = ans_a ? chan_b : chan_a;
+			switch_channel_t *a = un == chan_b ? chan_a : chan_b;
 
-			if (!switch_channel_test_flag(un, CF_OUTBOUND)) {
-				switch_channel_pass_callee_id(un == chan_b ? chan_a : chan_b, un);
+			if (switch_channel_direction(un) == SWITCH_CALL_DIRECTION_INBOUND) {
+				if (switch_channel_direction(a) == SWITCH_CALL_DIRECTION_OUTBOUND || (un == chan_a && !originator)) {
+					switch_channel_pass_callee_id(a, un);
+				}
+
 				if (switch_channel_answer(un) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s Media Establishment Failed.\n", switch_channel_get_name(un));
 					goto end_of_bridge_loop;
 				}
-			}
 
-			if (ans_a)
-				ans_b = 1;
-			else
-				ans_a = 1;
+				if (ans_a) {
+					ans_b = 1;
+				} else {
+					ans_a = 1;
+				}
+			}
 		}
 
 		if (originator && !sent_update && ans_a && ans_b && switch_channel_media_ack(chan_a) && switch_channel_media_ack(chan_b)) {
@@ -1146,7 +1142,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_multi_threaded_bridge(switch_core_ses
 	if (switch_channel_test_flag(peer_channel, CF_ANSWERED) || switch_channel_test_flag(peer_channel, CF_EARLY_MEDIA) ||
 		switch_channel_test_flag(peer_channel, CF_RING_READY)) {
 		const char *app, *data;
-
+		
 		switch_channel_set_state(peer_channel, CS_CONSUME_MEDIA);
 
 		if (switch_event_create(&event, SWITCH_EVENT_CHANNEL_BRIDGE) == SWITCH_STATUS_SUCCESS) {
@@ -1188,6 +1184,10 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_multi_threaded_bridge(switch_core_ses
 					switch_channel_answer(caller_channel);
 				}
 			}
+
+			switch_channel_wait_for_flag(peer_channel, CF_BROADCAST, SWITCH_FALSE, 10000, caller_channel);
+			switch_ivr_parse_all_events(peer_session);
+			switch_ivr_parse_all_events(session);
 
 			msg.message_id = SWITCH_MESSAGE_INDICATE_BRIDGE;
 			msg.from = __FILE__;
@@ -1561,7 +1561,7 @@ SWITCH_DECLARE(void) switch_ivr_intercept_session(switch_core_session_t *session
 		}
 	}
 
-	switch_channel_pre_answer(channel);
+	switch_channel_answer(channel);
 
 	if (!zstr(buuid)) {
 		if ((bsession = switch_core_session_locate(buuid))) {

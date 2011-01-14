@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -161,6 +161,15 @@ static void extract_header_vars(sofia_profile_t *profile, sip_t const *sip, swit
 	char *full;
 
 	if (sip) {
+		if (sip->sip_route) {
+			if ((full = sip_header_as_string(profile->home, (void *) sip->sip_route))) {
+				const char *v = switch_channel_get_variable(channel, "sip_full_route");
+				if (!v) { 
+					switch_channel_set_variable(channel, "sip_full_route", full);
+				}
+				su_free(profile->home, full);
+			}
+		}
 		if (sip->sip_via) {
 			if ((full = sip_header_as_string(profile->home, (void *) sip->sip_via))) {
 				const char *v = switch_channel_get_variable(channel, "sip_full_via");
@@ -357,7 +366,7 @@ void sofia_handle_sip_i_notify(switch_core_session_t *session, int status,
 			goto error;
 		}
 
-		if (!switch_channel_test_flag(channel, CF_OUTBOUND)) {
+		if (switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_INBOUND) {
 			switch_channel_answer(channel);
 			switch_channel_set_variable(channel, "auto_answer_destination", switch_channel_get_variable(channel, "destination_number"));
 			switch_ivr_session_transfer(session, "auto_answer", NULL, NULL);
@@ -1468,8 +1477,6 @@ void *SWITCH_THREAD_FUNC sofia_profile_thread_run(switch_thread_t *thread, void 
 									 TPTAG_TLS_VERIFY_POLICY(0)),
 							  TAG_IF(sofia_test_pflag(profile, PFLAG_TLS),
 									 TPTAG_TLS_VERSION(profile->tls_version)),
-							  TAG_IF(sofia_test_pflag(profile, PFLAG_TLS),
-									 TPTAG_KEEPALIVE(20000)),
 							  TAG_IF(!strchr(profile->sipip, ':'),
 									 NTATAG_UDP_MTU(65535)),
 							  TAG_IF(sofia_test_pflag(profile, PFLAG_DISABLE_SRV),
@@ -1486,6 +1493,8 @@ void *SWITCH_THREAD_FUNC sofia_profile_thread_run(switch_thread_t *thread, void 
 							  TAG_IF(profile->timer_t2, NTATAG_SIP_T2(profile->timer_t2)),
 							  TAG_IF(profile->timer_t4, NTATAG_SIP_T4(profile->timer_t4)),
 							  SIPTAG_ACCEPT_STR("application/sdp, multipart/mixed"),
+							  TAG_IF(sofia_test_pflag(profile, PFLAG_NO_CONNECTION_REUSE),
+									TPTAG_REUSE(0)),
 							  TAG_END());	/* Last tag should always finish the sequence */
 	
 	if (!profile->nua) {
@@ -1715,16 +1724,9 @@ void launch_sofia_profile_thread(sofia_profile_t *profile)
 
 static void logger(void *logarg, char const *fmt, va_list ap)
 {
-	/* gcc 4.4 gets mad at us for testing if (ap) so let's try to work around it....*/
-	void *ap_ptr = (void *) (intptr_t) ap;
-	
 	if (!fmt) return;
 
-	if (ap_ptr) {
-		switch_log_vprintf(SWITCH_CHANNEL_LOG_CLEAN, mod_sofia_globals.tracelevel, fmt, ap);
-	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG_CLEAN, mod_sofia_globals.tracelevel, "%s", fmt);
-	}
+	switch_log_vprintf(SWITCH_CHANNEL_LOG_CLEAN, mod_sofia_globals.tracelevel, fmt, ap);
 }
 
 static su_log_t *sofia_get_logger(const char *name)
@@ -2061,10 +2063,6 @@ static void parse_gateways(sofia_profile_t *profile, switch_xml_t gateways_tag)
 				from_user = username;
 			}
 
-			if (zstr(extension)) {
-				extension = username;
-			}
-
 			if (zstr(proxy)) {
 				proxy = realm;
 			}
@@ -2156,8 +2154,13 @@ static void parse_gateways(sofia_profile_t *profile, switch_xml_t gateways_tag)
 				sipip = profile->sipip;
 			}
 
-			gateway->extension = switch_core_strdup(gateway->pool, extension);
+			if (zstr(extension)) {
+				extension = username;
+			} else {
+				gateway->real_extension = switch_core_strdup(gateway->pool, extension);
+			}
 
+			gateway->extension = switch_core_strdup(gateway->pool, extension);
 
 			if (!strncasecmp(proxy, "sip:", 4)) {
 				gateway->register_proxy = switch_core_strdup(gateway->pool, proxy);
@@ -2355,6 +2358,11 @@ switch_status_t reconfig_sofia(sofia_profile_t *profile)
 							sofia_set_pflag(profile, PFLAG_DISABLE_HOLD);
 						} else {
 							sofia_clear_pflag(profile, PFLAG_DISABLE_HOLD);
+						}
+					} else if (!strcasecmp(var, "auto-jitterbuffer-msec")) {
+						int msec = atoi(val);
+						if (msec > 19) {
+							profile->jb_msec = switch_core_strdup(profile->pool, val);
 						}
 					} else if (!strcasecmp(var, "sip-trace")) {
 						if (switch_true(val)) {
@@ -3094,6 +3102,11 @@ switch_status_t config_sofia(int reload, char *profile_name)
 						} else {
 							sofia_clear_pflag(profile, PFLAG_DISABLE_HOLD);
 						}
+					} else if (!strcasecmp(var, "auto-jitterbuffer-msec")) {
+						int msec = atoi(val);
+						if (msec > 19) {
+							profile->jb_msec = switch_core_strdup(profile->pool, val);
+						}
 					} else if (!strcasecmp(var, "dtmf-type")) {
 						if (!strcasecmp(val, "rfc2833")) {
 							profile->dtmf_type = DTMF_2833;
@@ -3673,6 +3686,13 @@ switch_status_t config_sofia(int reload, char *profile_name)
 						} else {
 							profile->timer_t4 = 4000;
 						}
+					} else if (!strcasecmp(var, "reuse-connections")) {
+						switch_bool_t value = switch_true(val);
+						if (!value) {
+							sofia_set_pflag(profile, PFLAG_NO_CONNECTION_REUSE);
+						} else {
+							sofia_clear_pflag(profile, PFLAG_NO_CONNECTION_REUSE);
+						}
 					}
 				}
 
@@ -4112,7 +4132,7 @@ static void sofia_handle_sip_r_invite(switch_core_session_t *session, int status
 
 		}
 
-		if (channel && sip && (status == 300 || status == 301 || status == 302 || status == 305) && switch_channel_test_flag(channel, CF_OUTBOUND)) {
+		if (channel && sip && (status == 300 || status == 301 || status == 302 || status == 305) && switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_OUTBOUND) {
 			sip_contact_t *p_contact = sip->sip_contact;
 			int i = 0;
 			char var_name[80];
@@ -4643,7 +4663,7 @@ static void sofia_handle_sip_i_state(switch_core_session_t *session, int status,
 		status = 183;
 	}
 
-	if (channel && (status == 180 || status == 183) && switch_channel_test_flag(channel, CF_OUTBOUND)) {
+	if (channel && (status == 180 || status == 183) && switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_OUTBOUND) {
 		const char *val;
 		if ((val = switch_channel_get_variable(channel, "sip_auto_answer")) && switch_true(val)) {
 			nua_notify(nh, NUTAG_NEWSUB(1), NUTAG_SUBSTATE(nua_substate_active), SIPTAG_EVENT_STR("talk"), TAG_END());
@@ -4690,7 +4710,7 @@ static void sofia_handle_sip_i_state(switch_core_session_t *session, int status,
 
 		if (r_sdp) {
 			if (switch_channel_test_flag(channel, CF_PROXY_MODE) || switch_channel_test_flag(channel, CF_PROXY_MEDIA)) {
-				if (switch_channel_test_flag(channel, CF_PROXY_MEDIA) && !switch_channel_test_flag(tech_pvt->channel, CF_OUTBOUND)) {
+				if (switch_channel_test_flag(channel, CF_PROXY_MEDIA) &&  switch_channel_direction(tech_pvt->channel) == SWITCH_CALL_DIRECTION_INBOUND) {
 					switch_channel_set_variable(channel, SWITCH_ENDPOINT_DISPOSITION_VARIABLE, "PROXY MEDIA");
 				}
 				sofia_set_flag_locked(tech_pvt, TFLAG_EARLY_MEDIA);
@@ -4713,7 +4733,7 @@ static void sofia_handle_sip_i_state(switch_core_session_t *session, int status,
 				}
 				goto done;
 			} else {
-				if (sofia_test_flag(tech_pvt, TFLAG_LATE_NEGOTIATION) && !switch_channel_test_flag(tech_pvt->channel, CF_OUTBOUND)) {
+				if (sofia_test_flag(tech_pvt, TFLAG_LATE_NEGOTIATION) &&  switch_channel_direction(tech_pvt->channel) == SWITCH_CALL_DIRECTION_INBOUND) {
 					switch_channel_set_variable(channel, SWITCH_ENDPOINT_DISPOSITION_VARIABLE, "DELAYED NEGOTIATION");
 				} else {
 					if (sofia_glue_tech_media(tech_pvt, (char *) r_sdp) != SWITCH_STATUS_SUCCESS) {
@@ -4908,7 +4928,7 @@ static void sofia_handle_sip_i_state(switch_core_session_t *session, int status,
 							sofia_glue_tech_set_local_sdp(tech_pvt, NULL, SWITCH_FALSE);
 
 							if (!switch_channel_media_ready(channel)) {
-								if (!switch_channel_test_flag(tech_pvt->channel, CF_OUTBOUND)) {
+								if (switch_channel_direction(tech_pvt->channel) == SWITCH_CALL_DIRECTION_INBOUND) {
 									//const char *r_sdp = switch_channel_get_variable(channel, SWITCH_R_SDP_VARIABLE);
 
 									tech_pvt->num_codecs = 0;
@@ -5548,7 +5568,7 @@ void sofia_handle_sip_i_refer(nua_t *nua, sofia_profile_t *profile, nua_handle_t
 								switch_core_event_hook_add_state_change(a_session, xfer_hanguphook);
 								switch_channel_set_variable(a_channel, "att_xfer_kill_uuid", switch_core_session_get_uuid(b_session));
 
-								if ((tmp = switch_channel_get_variable(a_channel, SWITCH_HOLD_MUSIC_VARIABLE))) {
+								if ((tmp = switch_channel_get_hold_music(a_channel))) {
 									moh = tmp;
 								}
 
@@ -6210,6 +6230,7 @@ void sofia_handle_sip_i_invite(nua_t *nua, sofia_profile_t *profile, nua_handle_
 	char acl_token[512] = "";
 	sofia_transport_t transport;
 	const char *gw_name = NULL;
+	const char *gw_param_name = NULL;
 	char *call_info_str = NULL;
 	nua_handle_t *bnh = NULL;
 	char sip_acl_authed_by[512] = "";
@@ -6253,7 +6274,8 @@ void sofia_handle_sip_i_invite(nua_t *nua, sofia_profile_t *profile, nua_handle_
 
 	if (!is_nat && profile->nat_acl_count) {
 		uint32_t x = 0;
-		int ok = 1;
+		int contact_private_ip = 1;
+		int network_private_ip = 0;
 		char *last_acl = NULL;
 		const char *contact_host = NULL;
 
@@ -6262,14 +6284,37 @@ void sofia_handle_sip_i_invite(nua_t *nua, sofia_profile_t *profile, nua_handle_
 		}
 
 		if (!zstr(contact_host)) {
+			/* NAT mode double check logic and examples.
+
+			   Example 1: the contact_host is 192.168.1.100 and the network_ip is also 192.168.1.100 the end point 
+			   is most likely behind nat with us so we need to veto that decision to turn on nat processing.
+
+			   Example 2: the contact_host is 192.168.1.100 and the network_ip is 192.0.2.100 which is a public internet ip
+			   the remote endpoint is likely behind a remote nat traversing the public internet. 
+
+			   This secondary check is here to double check the conclusion of nat settigs to ensure we don't set net
+			   in cases where we don't really need to be doing this. 
+
+			   Why would you want to do this?  Well if your FreeSWITCH is behind nat and you want to talk to endpoints behind
+			   remote NAT over the public internet in addition to endpoints behind nat with you.  This simplifies that process.
+
+			*/
+
 			for (x = 0; x < profile->nat_acl_count; x++) {
 				last_acl = profile->nat_acl[x];
-				if (!(ok = switch_check_network_list_ip(contact_host, last_acl))) {
+				if ((contact_private_ip = switch_check_network_list_ip(contact_host, last_acl))) {
 					break;
 				}
 			}
+			if (contact_private_ip) {
+				for (x = 0; x < profile->nat_acl_count; x++) {
+					if ((network_private_ip = switch_check_network_list_ip(network_ip, profile->nat_acl[x]))) {
+						break;
+					}
+				}
+			}
 
-			if (ok) {
+			if (contact_private_ip && !network_private_ip) {
 				is_nat = last_acl;
 			}
 		}
@@ -6818,26 +6863,50 @@ void sofia_handle_sip_i_invite(nua_t *nua, sofia_profile_t *profile, nua_handle_
 
 
 	if (sip->sip_request->rq_url->url_params) {
-		gw_name = sofia_glue_find_parameter(sip->sip_request->rq_url->url_params, "gw=");
+		gw_param_name = sofia_glue_find_parameter_value(session, sip->sip_request->rq_url->url_params, "gw=");
 	}
 
 	if (strstr(destination_number, "gw+")) {
-		gw_name = destination_number + 3;
+		if (sofia_test_pflag(profile, PFLAG_FULL_ID)) {
+			char *tmp;
+			gw_name = switch_core_session_strdup(session, destination_number + 3);
+			if ((tmp = strchr(gw_name, '@'))) {
+				*tmp = '\0';
+			}
+		} else {
+			gw_name = destination_number + 3;
+		}
 	}
 
-	if (gw_name) {
-		sofia_gateway_t *gateway;
-		if (gw_name && (gateway = sofia_reg_find_gateway(gw_name))) {
+	if (gw_name || gw_param_name) {
+		sofia_gateway_t *gateway = NULL;
+		char *extension = NULL;
+
+		if (gw_name && ((gateway = sofia_reg_find_gateway(gw_name)))) {
+			gw_param_name = NULL;
+			extension = gateway->extension;
+		}
+
+		if (!gateway && gw_param_name) {
+			gateway = sofia_reg_find_gateway(gw_param_name);
+			extension = gateway->real_extension;
+		}
+
+		if (gateway) {
 			context = switch_core_session_strdup(session, gateway->register_context);
 			switch_channel_set_variable(channel, "sip_gateway", gateway->name);
 
-			if (gateway->extension) {
-				if (!strcasecmp(gateway->extension, "auto_to_user")) {
+			if (!zstr(extension)) {
+				if (!strcasecmp(extension, "auto_to_user")) {
 					destination_number = sip->sip_to->a_url->url_user;
+				} else if (!strcasecmp(extension, "auto")) {
+					if (gw_name) {
+						destination_number = sip->sip_to->a_url->url_user;
+					}
 				} else {
-					destination_number = switch_core_session_strdup(session, gateway->extension);
+					destination_number = switch_core_session_strdup(session, extension);
 				}
-			} else {
+			} else if (!gw_param_name) {
 				destination_number = sip->sip_to->a_url->url_user;
 			}
 
@@ -7001,6 +7070,8 @@ void sofia_handle_sip_i_invite(nua_t *nua, sofia_profile_t *profile, nua_handle_
 
 	if (tech_pvt->caller_profile) {
 
+		int first_history_info = 1;
+
 		if (rpid) {
 			if (rpid->rpid_privacy) {
 				if (!strcasecmp(rpid->rpid_privacy, "yes")) {
@@ -7045,7 +7116,28 @@ void sofia_handle_sip_i_invite(nua_t *nua, sofia_profile_t *profile, nua_handle_
 					}
 				}
 			} else if (!strncasecmp(un->un_name, "History-Info", 12)) {
-				switch_channel_set_variable(channel, "sip_history_info", un->un_value);
+				if (first_history_info) {
+					/* If the header exists first time, make sure to remove old info and re-set the variable */
+					switch_channel_set_variable(channel, "sip_history_info", un->un_value);
+					first_history_info = 0;
+				} else {
+					/* Append the History-Info into one long string */
+					const char *history_var = switch_channel_get_variable(channel, "sip_history_info");
+					if (!zstr(history_var)) {
+						char *tmp_str;
+						if ((tmp_str = switch_mprintf("%s, %s", history_var, un->un_value))) {
+							switch_channel_set_variable(channel, "sip_history_info", tmp_str);
+							free(tmp_str);
+						} else {
+							switch_channel_set_variable(channel, "sip_history_info", un->un_value);
+						}
+					} else {
+						switch_channel_set_variable(channel, "sip_history_info", un->un_value);
+					}
+				}
+			} else if (!strcasecmp(un->un_name, "X-FS-Channel-Name") && !zstr(un->un_value)) {
+				switch_channel_set_name(channel, un->un_value);
+				switch_channel_set_variable(channel, "push_channel_name", "true");
 			} else if (!strcasecmp(un->un_name, "X-FS-Support")) {
 				tech_pvt->x_freeswitch_support_remote = switch_core_session_strdup(session, un->un_value);
 			} else if (!strncasecmp(un->un_name, "X-", 2) || !strncasecmp(un->un_name, "P-", 2)) {

@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -573,6 +573,24 @@ SWITCH_DECLARE(switch_status_t) switch_cache_db_execute_sql(switch_cache_db_hand
 }
 
 
+SWITCH_DECLARE(int) switch_cache_db_affected_rows(switch_cache_db_handle_t *dbh)
+{
+	switch (dbh->type) {
+	case SCDB_TYPE_CORE_DB:
+		{
+			return switch_core_db_changes(dbh->native_handle.core_db_dbh);
+		}
+		break;
+	case SCDB_TYPE_ODBC:
+		{
+			return switch_odbc_handle_affected_rows(dbh->native_handle.odbc_dbh);
+		}
+		break;
+	}
+	return 0;
+}
+
+
 SWITCH_DECLARE(char *) switch_cache_db_execute_sql2str(switch_cache_db_handle_t *dbh, char *sql, char *str, size_t len, char **err)
 {
 	switch_status_t status = SWITCH_STATUS_FALSE;
@@ -913,11 +931,11 @@ static void *SWITCH_THREAD_FUNC switch_core_sql_thread(switch_thread_t *thread, 
 	uint32_t target = 20000;
 	switch_size_t len = 0, sql_len = runtime.sql_buffer_len;
 	char *tmp, *sqlbuf = (char *) malloc(sql_len);
-	char *sql = NULL;
+	char *sql = NULL, *save_sql = NULL;
 	switch_size_t newlen;
-	int lc = 0;
+	int lc = 0, wrote = 0, do_sleep = 1;
 	uint32_t sanity = 120;
-
+	
 	switch_assert(sqlbuf);
 
 	while (!sql_manager.event_db) {
@@ -938,11 +956,16 @@ static void *SWITCH_THREAD_FUNC switch_core_sql_thread(switch_thread_t *thread, 
 	switch_mutex_lock(sql_manager.cond_mutex);
 
 	while (sql_manager.thread_running == 1) {
-		if (sql || switch_queue_trypop(sql_manager.sql_queue[0], &pop) == SWITCH_STATUS_SUCCESS ||
+		if (save_sql || switch_queue_trypop(sql_manager.sql_queue[0], &pop) == SWITCH_STATUS_SUCCESS ||
 			switch_queue_trypop(sql_manager.sql_queue[1], &pop) == SWITCH_STATUS_SUCCESS) {
 
-			if (!sql) sql = (char *) pop;
-
+			if (save_sql) {
+				sql = save_sql;
+				save_sql = NULL;
+			} else if ((sql = (char *) pop)) {
+				pop = NULL;
+			}
+			
 			if (sql) {
 				newlen = strlen(sql) + 2;
 
@@ -971,6 +994,9 @@ static void *SWITCH_THREAD_FUNC switch_core_sql_thread(switch_thread_t *thread, 
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, 
 										  "SAVE %d %d\n", switch_queue_size(sql_manager.sql_queue[0]), switch_queue_size(sql_manager.sql_queue[1]));
 #endif
+						save_sql = sql;
+						sql = NULL;
+						lc = 0;
 						goto skip;
 					}
 				}
@@ -986,10 +1012,12 @@ static void *SWITCH_THREAD_FUNC switch_core_sql_thread(switch_thread_t *thread, 
 			}
 		}
 
+		lc = switch_queue_size(sql_manager.sql_queue[0]) + switch_queue_size(sql_manager.sql_queue[1]);
+
 	skip:
 		
-		lc = sql ? 1 : 0 + switch_queue_size(sql_manager.sql_queue[0]) + switch_queue_size(sql_manager.sql_queue[1]);
-		
+		wrote = 0;
+
 		if (trans && iterations && (iterations > target || !lc)) {
 #ifdef DEBUG_SQL
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, 
@@ -1006,14 +1034,25 @@ static void *SWITCH_THREAD_FUNC switch_core_sql_thread(switch_thread_t *thread, 
 			len = 0;
 			*sqlbuf = '\0';
 			lc = 0;
-			switch_yield(400000);
+			if (do_sleep) {
+				switch_yield(200000);
+			}
+			wrote = 1;
 		}
 
-		lc = sql ? 1 : 0 + switch_queue_size(sql_manager.sql_queue[0]) + switch_queue_size(sql_manager.sql_queue[1]);
+		lc = switch_queue_size(sql_manager.sql_queue[0]) + switch_queue_size(sql_manager.sql_queue[1]);
 		
 		if (!lc) {
 			switch_thread_cond_wait(sql_manager.cond, sql_manager.cond_mutex);
+		} else if (wrote) {
+			if (lc > 2000) {
+				do_sleep = 0;
+			} else {
+				do_sleep = 1;
+			}
 		}
+		
+		
 	}
 
 	switch_mutex_unlock(sql_manager.cond_mutex);
@@ -1603,6 +1642,7 @@ switch_status_t switch_core_sqldb_start(switch_memory_pool_t *pool, switch_bool_
 			runtime.odbc_dsn = NULL;
 			runtime.odbc_user = NULL;
 			runtime.odbc_pass = NULL;
+			runtime.odbc_dbtype = DBTYPE_DEFAULT;
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Falling back to core_db.\n");
 			goto top;
 		}

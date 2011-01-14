@@ -19,6 +19,7 @@
 
     <!-- Event Handlers -->
     <load module="mod_cdr_csv"/>
+    <!-- <load module="mod_cdr_sqlite"/> -->
     <!-- <load module="mod_event_multicast"/> -->
     <load module="mod_event_socket"/>
     <!-- <load module="mod_zeroconf"/> -->
@@ -38,6 +39,7 @@
     <!-- <load module="mod_openzap"/> -->
     <!-- <load module="mod_unicall"/> -->
     <!-- <load module="mod_skinny"/> -->
+    <!-- <load module="mod_khomp"/>   -->
 
     <!-- Applications -->
     <load module="mod_commands"/>
@@ -54,6 +56,7 @@
     <load module="mod_fsv"/>
     <load module="mod_cluechoo"/>
     <load module="mod_valet_parking"/>
+    <!--<load module="mod_fsk"/>-->
     <!--<load module="mod_spy"/>-->
 
     <!-- SNOM Module -->

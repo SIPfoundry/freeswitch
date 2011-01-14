@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -495,7 +495,7 @@ switch_status_t callprogress_detector_stop(switch_core_session_t *session)
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	switch_media_bug_t *bug = switch_channel_get_private(channel, TONE_PRIVATE);
 	if (bug) {
-		switch_core_media_bug_close(&bug);
+		switch_core_media_bug_remove(session, &bug);
 		switch_channel_set_private(channel, TONE_PRIVATE, NULL);
 	}
 	return SWITCH_STATUS_SUCCESS;

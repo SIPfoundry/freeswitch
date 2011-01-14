@@ -82,7 +82,7 @@ sun)
 	fi
 	;;
 *)
-	COMP_VENDOR_COMPAT_CFLAGS="-Wall -Wunused-variable -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes"
+	COMP_VENDOR_COMPAT_CFLAGS="-Wall -Werror -Wunused-variable -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes"
 	COMP_VENDOR_CFLAGS="-std=c99 $COMP_VENDOR_COMPAT_CFLAGS"
 	;;
 esac
@@ -160,23 +160,12 @@ AC_ARG_WITH([pritap],
 	[AS_HELP_STRING([--with-pritap], [Install ftmod_pritap])],
 	[case "${withval}" in
 	 no)	enable_pritap="no" ;;
-	 *)	enable_pritab="yes" ;;
+	 *)	enable_pritap="yes" ;;
 	 esac],
 	[enable_pritap="no"]
 )
 HAVE_PRITAP="${enable_pritap}"
 AM_CONDITIONAL([HAVE_PRITAP],[test "${enable_pritap}" = "yes"])
-
-# debug dtmf?
-AC_ARG_WITH([debugdtmf],
-	[AS_HELP_STRING([--with-debugdtmf], [Debug DTMF])],
-	[case "${withval}" in
-	 no)	enable_debugdtmf="no" ;;
-	 *)	enable_debugdtmf="yes" ;;
-	 esac],
-	[enable_debugdtmf="no"]
-)
-AM_CONDITIONAL([WANT_DEBUGDTMF], [test "${enable_debugdtmf}" = "yes"])
 
 ##
 # OpenR2 stack

@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -346,8 +346,8 @@ static switch_status_t load_config(switch_memory_pool_t *pool)
 				} else if (!strcasecmp(var, "default-template")) {
 					globals.default_template = switch_core_strdup(pool, val);
 				} else if (!strcasecmp(var, "master-file-only")) {
-					globals.masterfileonly = switch_true(val);
-				}
+					globals.masterfileonly = switch_true(val);
+				}
 			}
 		}
 
@@ -403,8 +403,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_cdr_csv_load)
 
 	switch_core_add_state_handler(&state_handlers);
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
-
-
 
 
 	return status;

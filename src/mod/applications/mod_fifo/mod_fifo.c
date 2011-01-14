@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -291,6 +291,7 @@ static switch_status_t fifo_queue_popfly(fifo_queue_t *queue, const char *uuid)
 struct fifo_node {
 	char *name;
 	switch_mutex_t *mutex;
+	switch_mutex_t *update_mutex;
 	fifo_queue_t *fifo_list[MAX_PRI];
 	switch_hash_t *consumer_hash;
 	int outbound_priority;
@@ -396,12 +397,12 @@ static switch_status_t on_dtmf(switch_core_session_t *session, void *input, swit
 					const char *moh_a = NULL, *moh_b = NULL;
 
 					if (!(moh_b = switch_channel_get_variable(bchan, "fifo_music"))) {
-						moh_b = switch_channel_get_variable(bchan, "hold_music");
+						moh_b = switch_channel_get_hold_music(bchan);
 					}
 
 					if (!(moh_a = switch_channel_get_variable(channel, "fifo_hold_music"))) {
 						if (!(moh_a = switch_channel_get_variable(channel, "fifo_music"))) {
-							moh_a = switch_channel_get_variable(channel, "hold_music");
+							moh_a = switch_channel_get_hold_music(channel);
 						}
 					}
 
@@ -581,6 +582,8 @@ static int check_caller_outbound_call(const char *key)
 {
 	int x = 0;
 
+	if (!key) return x;
+
 	switch_mutex_lock(globals.caller_orig_mutex);
 	x = !!switch_core_hash_find(globals.caller_orig_hash, key);
 	switch_mutex_unlock(globals.caller_orig_mutex);
@@ -591,6 +594,8 @@ static int check_caller_outbound_call(const char *key)
 
 static void add_caller_outbound_call(const char *key, switch_call_cause_t *cancel_cause)
 {
+	if (!key) return;
+
 	switch_mutex_lock(globals.caller_orig_mutex);
 	switch_core_hash_insert(globals.caller_orig_hash, key, cancel_cause);
 	switch_mutex_unlock(globals.caller_orig_mutex);
@@ -598,6 +603,8 @@ static void add_caller_outbound_call(const char *key, switch_call_cause_t *cance
 
 static void del_caller_outbound_call(const char *key)
 {
+	if (!key) return;
+
 	switch_mutex_lock(globals.caller_orig_mutex);
 	switch_core_hash_delete(globals.caller_orig_hash, key);
 	switch_mutex_unlock(globals.caller_orig_mutex);
@@ -606,6 +613,8 @@ static void del_caller_outbound_call(const char *key)
 static void cancel_caller_outbound_call(const char *key, switch_call_cause_t cause)
 {
 	switch_call_cause_t *cancel_cause = NULL;
+
+	if (!key) return;
 
 	switch_mutex_lock(globals.caller_orig_mutex);
     if ((cancel_cause = (switch_call_cause_t *) switch_core_hash_find(globals.caller_orig_hash, key))) {
@@ -623,6 +632,8 @@ static int check_bridge_call(const char *key)
 {
 	int x = 0;
 
+	if (!key) return x;
+
 	switch_mutex_lock(globals.bridge_mutex);
 	x = !!switch_core_hash_find(globals.bridge_hash, key);
 	switch_mutex_unlock(globals.bridge_mutex);
@@ -633,6 +644,8 @@ static int check_bridge_call(const char *key)
 
 static void add_bridge_call(const char *key)
 {
+	if (!key) return;
+
 	switch_mutex_lock(globals.bridge_mutex);
 	switch_core_hash_insert(globals.bridge_hash, key, (void *)&marker);
 	switch_mutex_unlock(globals.bridge_mutex);
@@ -650,6 +663,8 @@ static int check_consumer_outbound_call(const char *key)
 {
 	int x = 0;
 
+	if (!key) return x;
+
 	switch_mutex_lock(globals.consumer_orig_mutex);
 	x = !!switch_core_hash_find(globals.consumer_orig_hash, key);
 	switch_mutex_unlock(globals.consumer_orig_mutex);
@@ -659,6 +674,8 @@ static int check_consumer_outbound_call(const char *key)
 
 static void add_consumer_outbound_call(const char *key, switch_call_cause_t *cancel_cause)
 {
+	if (!key) return;
+
 	switch_mutex_lock(globals.consumer_orig_mutex);
 	switch_core_hash_insert(globals.consumer_orig_hash, key, cancel_cause);
 	switch_mutex_unlock(globals.consumer_orig_mutex);
@@ -666,6 +683,8 @@ static void add_consumer_outbound_call(const char *key, switch_call_cause_t *can
 
 static void del_consumer_outbound_call(const char *key)
 {
+	if (!key) return;
+
 	switch_mutex_lock(globals.consumer_orig_mutex);
 	switch_core_hash_delete(globals.consumer_orig_hash, key);
 	switch_mutex_unlock(globals.consumer_orig_mutex);
@@ -674,6 +693,8 @@ static void del_consumer_outbound_call(const char *key)
 static void cancel_consumer_outbound_call(const char *key, switch_call_cause_t cause)
 {
 	switch_call_cause_t *cancel_cause = NULL;
+
+	if (!key) return;
 
 	switch_mutex_lock(globals.consumer_orig_mutex);
     if ((cancel_cause = (switch_call_cause_t *) switch_core_hash_find(globals.consumer_orig_hash, key))) {
@@ -801,6 +822,7 @@ static fifo_node_t *create_node(const char *name, uint32_t importance, switch_mu
 	switch_core_hash_init(&node->consumer_hash, node->pool);
 	switch_thread_rwlock_create(&node->rwlock, node->pool);
 	switch_mutex_init(&node->mutex, SWITCH_MUTEX_NESTED, node->pool);
+	switch_mutex_init(&node->update_mutex, SWITCH_MUTEX_NESTED, node->pool);
 	cbt.buf = outbound_count;
 	cbt.len = sizeof(outbound_count);
 	sql = switch_mprintf("select count(*) from fifo_outbound where fifo_name = '%q'", name);
@@ -951,9 +973,14 @@ static switch_status_t messagehook (switch_core_session_t *session, switch_core_
 	consumer_channel = switch_core_session_get_channel(consumer_session);
 	outbound_id = switch_channel_get_variable(consumer_channel, "fifo_outbound_uuid");
 
+	if (!outbound_id) return SWITCH_STATUS_SUCCESS;
+
 	switch (msg->message_id) {
     case SWITCH_MESSAGE_INDICATE_BRIDGE:
     case SWITCH_MESSAGE_INDICATE_UNBRIDGE:
+		if (msg->numeric_arg == 42) {
+			goto end;
+		}
 		if ((caller_session = switch_core_session_locate(msg->string_arg))) {
 			caller_channel = switch_core_session_get_channel(caller_session);
 			if (msg->message_id == SWITCH_MESSAGE_INDICATE_BRIDGE) {
@@ -1006,7 +1033,6 @@ static switch_status_t messagehook (switch_core_session_t *session, switch_core_
 									  switch_channel_get_variable(caller_channel, "fifo_import_prefix"));
 			}
 
-				
 			ced_name = switch_channel_get_variable(consumer_channel, "callee_id_name");
 			ced_number = switch_channel_get_variable(consumer_channel, "callee_id_number");
 
@@ -1193,10 +1219,10 @@ static void *SWITCH_THREAD_FUNC ringall_thread_run(switch_thread_t *thread, void
 
 
 	if (node) {
-		switch_thread_rwlock_wrlock(node->rwlock);
+		switch_mutex_lock(node->update_mutex);
 		node->busy = 0;
 		node->ring_consumer_count = 1;
-		switch_thread_rwlock_unlock(node->rwlock);
+		switch_mutex_unlock(node->update_mutex);
 	} else {
 		goto end;
 	}
@@ -1437,10 +1463,10 @@ static void *SWITCH_THREAD_FUNC ringall_thread_run(switch_thread_t *thread, void
 	cbh->ready = 1;
 
 	if (node) {
-		switch_thread_rwlock_wrlock(node->rwlock);
+		switch_mutex_lock(node->update_mutex);
 		node->ring_consumer_count = 0;
 		node->busy = 0;
-		switch_thread_rwlock_unlock(node->rwlock);
+		switch_mutex_unlock(node->update_mutex);
 	}
 
 
@@ -1501,10 +1527,10 @@ static void *SWITCH_THREAD_FUNC o_thread_run(switch_thread_t *thread, void *obj)
 	switch_mutex_unlock(globals.mutex);
 
 	if (node) {
-		switch_thread_rwlock_wrlock(node->rwlock);
+		switch_mutex_lock(node->update_mutex);
 		node->ring_consumer_count++;
 		node->busy = 0;
-		switch_thread_rwlock_unlock(node->rwlock);
+		switch_mutex_unlock(node->update_mutex);
 	}
 
 	switch_event_create(&ovars, SWITCH_EVENT_REQUEST_PARAMS);
@@ -1601,12 +1627,12 @@ static void *SWITCH_THREAD_FUNC o_thread_run(switch_thread_t *thread, void *obj)
 
 	switch_event_destroy(&ovars);
 	if (node) {
-		switch_thread_rwlock_wrlock(node->rwlock);
+		switch_mutex_lock(node->update_mutex);
 		if (node->ring_consumer_count-- < 0) {
 			node->ring_consumer_count = 0;
 		}
 		node->busy = 0;
-		switch_thread_rwlock_unlock(node->rwlock);
+		switch_mutex_unlock(node->update_mutex);
 	}
 	switch_core_destroy_memory_pool(&h->pool);
 
@@ -1754,9 +1780,36 @@ static void *SWITCH_THREAD_FUNC node_thread_run(switch_thread_t *thread, void *o
 		if (globals.debug) switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Trying priority: %d\n", cur_priority);
 		
 
+	restart:
+
 		for (hi = switch_hash_first(NULL, globals.fifo_hash); hi; hi = switch_hash_next(hi)) {
 			switch_hash_this(hi, &var, NULL, &val);
 			if ((node = (fifo_node_t *) val)) {
+				int x = 0;
+				switch_event_t *pop;
+
+				if (node->ready == FIFO_DELAY_DESTROY) {
+					if (switch_thread_rwlock_trywrlock(node->rwlock) == SWITCH_STATUS_SUCCESS) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "%s removed.\n", node->name);
+						switch_core_hash_delete(globals.fifo_hash, node->name);
+
+						for (x = 0; x < MAX_PRI; x++) {
+							while (fifo_queue_pop(node->fifo_list[x], &pop, 2) == SWITCH_STATUS_SUCCESS) {
+								switch_event_destroy(&pop);
+							}
+						}
+						
+						node->ready = 0;
+						switch_core_hash_destroy(&node->consumer_hash);
+						switch_mutex_unlock(node->mutex);
+						switch_mutex_unlock(node->update_mutex);
+						switch_thread_rwlock_unlock(node->rwlock);
+						switch_core_destroy_memory_pool(&node->pool);
+						goto restart;
+					}
+				}
+				
+
 				if (node->outbound_priority == 0) node->outbound_priority = 5;
 				if (node->has_outbound && node->ready && !node->busy && node->outbound_priority == cur_priority) {
 					ppl_waiting = node_caller_count(node);
@@ -1920,6 +1973,8 @@ static uint32_t fifo_add_outbound(const char *node_name, const char *url, uint32
 		priority = MAX_PRI - 1;
 	}
 
+	if (!node_name) return 0;
+
 	switch_mutex_lock(globals.mutex);
 
 	if (!(node = switch_core_hash_find(globals.fifo_hash, node_name))) {
@@ -2050,17 +2105,18 @@ SWITCH_STANDARD_APP(fifo_track_call_function)
 		return;
 	}
 
-	switch_core_event_hook_add_receive_message(session, messagehook);
-	switch_core_event_hook_add_state_run(session, hanguphook);
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s tracking call on uuid %s!\n", switch_channel_get_name(channel), data);
+	switch_channel_set_variable(channel, "fifo_outbound_uuid", data);
+	switch_channel_set_variable(channel, "fifo_track_call", "true");
 
 	add_bridge_call(data);
 
 	switch_channel_set_app_flag_key(FIFO_APP_KEY, channel, FIFO_APP_TRACKING);
 
-	switch_channel_set_variable(channel, "fifo_outbound_uuid", data);
-	switch_channel_set_variable(channel, "fifo_track_call", "true");
+	switch_core_event_hook_add_receive_message(session, messagehook);
+	switch_core_event_hook_add_state_run(session, hanguphook);
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s tracking call on uuid %s!\n", switch_channel_get_name(channel), data);
+
 	
 	if (switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_OUTBOUND) {
 		col1 = "manual_calls_in_count";
@@ -2144,7 +2200,7 @@ SWITCH_STANDARD_APP(fifo_function)
 	char *mydata = NULL, *argv[5] = { 0 };
 	fifo_node_t *node = NULL, *node_list[MAX_NODES_PER_CONSUMER + 1] = { 0 };
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	int do_wait = 1, node_count = 0, i = 0;
+	int do_destroy = 0, do_wait = 1, node_count = 0, i = 0;
 	const char *moh = NULL;
 	const char *announce = NULL;
 	switch_event_t *event = NULL;
@@ -2220,11 +2276,9 @@ SWITCH_STANDARD_APP(fifo_function)
 			node = create_node(nlist[i], importance, globals.sql_mutex);
 			node->ready = 1;
 		}
-		node_list[node_count++] = node;
-	}
 
-	if (switch_true(switch_channel_get_variable(channel, "fifo_destroy_after_use")) && node->ready == 1) {
-		node->ready = FIFO_DELAY_DESTROY;
+		switch_thread_rwlock_rdlock(node->rwlock);
+		node_list[node_count++] = node;
 	}
 
 	switch_mutex_unlock(globals.mutex);
@@ -2306,7 +2360,7 @@ SWITCH_STANDARD_APP(fifo_function)
 
 		switch_channel_answer(channel);
 
-		switch_thread_rwlock_wrlock(node->rwlock);
+		switch_mutex_lock(node->update_mutex);
 
 		if ((pri = switch_channel_get_variable(channel, "fifo_priority"))) {
 			p = atoi(pri);
@@ -2344,7 +2398,7 @@ SWITCH_STANDARD_APP(fifo_function)
 			switch_channel_set_variable(channel, "fifo_priority", tmp);
 		}
 
-		switch_thread_rwlock_unlock(node->rwlock);
+		switch_mutex_unlock(node->update_mutex);
 
 		ts = switch_micro_time_now();
 		switch_time_exp_lt(&tm, ts);
@@ -2450,9 +2504,9 @@ SWITCH_STANDARD_APP(fifo_function)
 			}
 
 			switch_mutex_lock(globals.mutex);
-			switch_thread_rwlock_wrlock(node->rwlock);
+			switch_mutex_lock(node->update_mutex);
 			node_remove_uuid(node, uuid);
-			switch_thread_rwlock_unlock(node->rwlock);
+			switch_mutex_unlock(node->update_mutex);
 			send_presence(node);
 			check_cancel(node);
 			switch_mutex_unlock(globals.mutex);
@@ -2682,9 +2736,9 @@ SWITCH_STANDARD_APP(fifo_function)
 				}
 
 				if (pop && !node_caller_count(node)) {
-					switch_thread_rwlock_wrlock(node->rwlock);
+					switch_mutex_lock(node->update_mutex);
 					node->start_waiting = 0;
-					switch_thread_rwlock_unlock(node->rwlock);
+					switch_mutex_unlock(node->update_mutex);
 				}
 			}
 
@@ -3074,21 +3128,21 @@ SWITCH_STANDARD_APP(fifo_function)
 
   done:
 
-	switch_mutex_lock(globals.mutex);
-	if (node && node->ready == FIFO_DELAY_DESTROY && node->consumer_count == 0 && node_caller_count(node) == 0) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "%s removed.\n", node->name);
-		switch_core_hash_delete(globals.fifo_hash, node->name);
-		switch_thread_rwlock_wrlock(node->rwlock);
-		node->ready = 0;
-		switch_mutex_lock(node->mutex);
-		switch_core_hash_destroy(&node->consumer_hash);
-		switch_mutex_unlock(node->mutex);
-		switch_thread_rwlock_unlock(node->rwlock);
-		switch_core_destroy_memory_pool(&node->pool);
+	if (switch_true(switch_channel_get_variable(channel, "fifo_destroy_after_use"))) {
+		do_destroy = 1;
+	}
 
+	switch_mutex_lock(globals.mutex);
+	for (i = 0; i < node_count; i++) {
+		if (!(node = node_list[i])) {
+			continue;
+		}
+		switch_thread_rwlock_unlock(node->rwlock);
+		if (node->ready == 1 && do_destroy) {
+			node->ready = FIFO_DELAY_DESTROY;
+		}
 	}
 	switch_mutex_unlock(globals.mutex);
-
 
 	switch_channel_clear_app_flag_key(FIFO_APP_KEY, channel, FIFO_APP_BRIDGE_TAG);
 
@@ -3699,9 +3753,9 @@ SWITCH_STANDARD_API(fifo_api_function)
 				switch_hash_this(hi, &var, NULL, &val);
 				node = (fifo_node_t *) val;
 				len = node_caller_count(node);
-				switch_thread_rwlock_wrlock(node->rwlock);
+				switch_mutex_lock(node->update_mutex);
 				stream->write_function(stream, "%s:%d:%d:%d\n", (char *) var, node->consumer_count, node_caller_count(node), len);
-				switch_thread_rwlock_unlock(node->rwlock);
+				switch_mutex_unlock(node->update_mutex);
 				x++;
 			}
 
@@ -3710,9 +3764,9 @@ SWITCH_STANDARD_API(fifo_api_function)
 			}
 		} else if ((node = switch_core_hash_find(globals.fifo_hash, argv[1]))) {
 			len = node_caller_count(node);
-			switch_thread_rwlock_wrlock(node->rwlock);
+			switch_mutex_lock(node->update_mutex);
 			stream->write_function(stream, "%s:%d:%d:%d\n", argv[1], node->consumer_count, node_caller_count(node), len);
-			switch_thread_rwlock_unlock(node->rwlock);
+			switch_mutex_unlock(node->update_mutex);
 		} else {
 			stream->write_function(stream, "none\n");
 		}
@@ -3722,9 +3776,9 @@ SWITCH_STANDARD_API(fifo_api_function)
 				switch_hash_this(hi, &var, NULL, &val);
 				node = (fifo_node_t *) val;
 				len = node_caller_count(node);
-				switch_thread_rwlock_wrlock(node->rwlock);
+				switch_mutex_lock(node->update_mutex);
 				stream->write_function(stream, "%s:%d\n", (char *) var, node->has_outbound);
-				switch_thread_rwlock_unlock(node->rwlock);
+				switch_mutex_unlock(node->update_mutex);
 				x++;
 			}
 
@@ -3733,9 +3787,9 @@ SWITCH_STANDARD_API(fifo_api_function)
 			}
 		} else if ((node = switch_core_hash_find(globals.fifo_hash, argv[1]))) {
 			len = node_caller_count(node);
-			switch_thread_rwlock_wrlock(node->rwlock);
+			switch_mutex_lock(node->update_mutex);
 			stream->write_function(stream, "%s:%d\n", argv[1], node->has_outbound);
-			switch_thread_rwlock_unlock(node->rwlock);
+			switch_mutex_unlock(node->update_mutex);
 		} else {
 			stream->write_function(stream, "none\n");
 		}
@@ -4108,7 +4162,7 @@ static switch_status_t load_config(int reload, int del_all)
 				node->ready = FIFO_DELAY_DESTROY;
 			} else {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "%s removed.\n", node->name);
-				switch_thread_rwlock_wrlock(node->rwlock);
+				switch_mutex_lock(node->update_mutex);
 				for (x = 0; x < MAX_PRI; x++) {
 					while (fifo_queue_pop(node->fifo_list[x], &pop, 2) == SWITCH_STATUS_SUCCESS) {
 						switch_event_destroy(&pop);
@@ -4117,7 +4171,7 @@ static switch_status_t load_config(int reload, int del_all)
 
 				switch_core_hash_delete(globals.fifo_hash, node->name);
 				switch_core_hash_destroy(&node->consumer_hash);
-				switch_thread_rwlock_unlock(node->rwlock);
+				switch_mutex_unlock(node->update_mutex);
 				switch_core_destroy_memory_pool(&node->pool);
 				goto top;
 			}
@@ -4138,6 +4192,8 @@ static void fifo_member_add(char *fifo_name, char *originate_string, int simo_co
 	char digest[SWITCH_MD5_DIGEST_STRING_SIZE] = { 0 };
 	char *sql, *name_dup, *p;
 	fifo_node_t *node = NULL;
+
+	if (!fifo_name) return;
 
 	if (switch_stristr("fifo_outbound_uuid=", originate_string)) {
 		extract_fifo_outbound_uuid(originate_string, digest, sizeof(digest));
@@ -4185,6 +4241,9 @@ static void fifo_member_del(char *fifo_name, char *originate_string)
 	char outbound_count[80] = "";
 	callback_t cbt = { 0 };
 	fifo_node_t *node = NULL;
+
+	if (!fifo_name) return;
+
 
 	if (switch_stristr("fifo_outbound_uuid=", originate_string)) {
 		extract_fifo_outbound_uuid(originate_string, digest, sizeof(digest));
@@ -4393,7 +4452,7 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_fifo_shutdown)
 		switch_hash_this(hi, NULL, NULL, &val);
 		node = (fifo_node_t *) val;
 
-		switch_thread_rwlock_wrlock(node->rwlock);
+		switch_mutex_lock(node->update_mutex);
 		switch_mutex_lock(node->mutex);
 		for (x = 0; x < MAX_PRI; x++) {
 			while (fifo_queue_pop(node->fifo_list[x], &pop, 2) == SWITCH_STATUS_SUCCESS) {
@@ -4403,7 +4462,7 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_fifo_shutdown)
 		switch_mutex_unlock(node->mutex);
 		switch_core_hash_delete(globals.fifo_hash, node->name);
 		switch_core_hash_destroy(&node->consumer_hash);
-		switch_thread_rwlock_unlock(node->rwlock);
+		switch_mutex_unlock(node->update_mutex);
 		switch_core_destroy_memory_pool(&node->pool);
 	}
 
