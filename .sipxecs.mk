@@ -6,7 +6,8 @@ freeswitch_PACKAGE_REVISION = $(shell \
 
 freeswitch_SRPM = freeswitch-1.0.7-$(freeswitch_PACKAGE_REVISION).src.rpm
 freeswitch_SPEC = $(SRC)/$(PROJ)/freeswitch.spec
-freeswitch_SOURCES = $(SRC)/$(PROJ)/freeswitch-1.0.7.tar.bz2 \
+freeswitch_TARBALL = $(BUILDDIR)/$(PROJ)/freeswitch-1.0.7.tar.bz2
+freeswitch_SOURCES = $(freeswitch_TARBALL) \
 	celt-0.7.1.tar.gz \
 	flite-1.3.99-latest.tar.gz \
 	lame-3.97.tar.gz \
@@ -26,5 +27,6 @@ freeswitch_RPM_DEFS = --define="buildno $(freeswitch_PACKAGE_REVISION)"
 freeswitch.autoreconf freeswitch.configure:;
 
 freeswitch.dist :
+	test -d $(dir $(freeswitch_TARBALL)) || mkdir -p $(dir $(freeswitch_TARBALL))
 	cd $(SRC)/$(PROJ); \
-	  git archive --format tar --prefix freeswitch-1.0.7/ HEAD | bzip2 > freeswitch-1.0.7.tar.bz2
+	  git archive --format tar --prefix freeswitch-1.0.7/ HEAD | bzip2 > $(freeswitch_TARBALL)
