@@ -386,7 +386,7 @@ ENDPOINTS_MODULES="endpoints/mod_dingaling endpoints/mod_loopback ../../libs/fre
 #						Event Handlers
 #
 ######################################################################################################################
-EVENT_HANDLERS_MODULES="event_handlers/mod_cdr_csv event_handlers/mod_cdr_sqlite event_handlers/mod_event_socket event_handlers/mod_event_multicast"
+EVENT_HANDLERS_MODULES="event_handlers/mod_cdr_csv event_handlers/mod_cdr_sqlite event_handlers/mod_event_socket event_handlers/mod_event_multicast event_handlers/mod_erlang_event"
 ######################################################################################################################
 #
 #					File and Audio Format Handlers
