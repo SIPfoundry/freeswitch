@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -115,7 +115,6 @@ struct switch_core_thread_session {
 struct switch_core_session;
 struct switch_core_runtime;
 struct switch_core_port_allocator;
-
 
 /*!
   \defgroup core1 Core Library 
@@ -246,6 +245,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_bug_close(_Inout_ switch_media
 */
 SWITCH_DECLARE(switch_status_t) switch_core_media_bug_remove_all(_In_ switch_core_session_t *session);
 
+SWITCH_DECLARE(switch_status_t) switch_core_media_bug_enumerate(switch_core_session_t *session, switch_stream_handle_t *stream);
+
 /*!
   \brief Read a frame from the bug
   \param bug the bug to read from
@@ -353,6 +354,11 @@ SWITCH_DECLARE(switch_status_t) switch_core_destroy(void);
 ///\defgroup rwl Read/Write Locking
 ///\ingroup core1
 ///\{
+
+
+SWITCH_DECLARE(switch_status_t) switch_core_session_io_read_lock(switch_core_session_t *session);
+SWITCH_DECLARE(switch_status_t) switch_core_session_io_write_lock(switch_core_session_t *session);
+SWITCH_DECLARE(switch_status_t) switch_core_session_io_rwunlock(switch_core_session_t *session);
 
 #ifdef SWITCH_DEBUG_RWLOCKS
 SWITCH_DECLARE(switch_status_t) switch_core_session_perform_read_lock(_In_ switch_core_session_t *session, const char *file, const char *func, int line);
@@ -706,6 +712,7 @@ SWITCH_DECLARE(void) switch_core_session_soft_lock(switch_core_session_t *sessio
 SWITCH_DECLARE(void) switch_core_session_soft_unlock(switch_core_session_t *session);
 SWITCH_DECLARE(void) switch_core_session_set_dmachine(switch_core_session_t *session, switch_ivr_dmachine_t *dmachine);
 SWITCH_DECLARE(switch_ivr_dmachine_t *) switch_core_session_get_dmachine(switch_core_session_t *session);
+SWITCH_DECLARE(switch_status_t) switch_core_session_set_codec_slin(switch_core_session_t *session, switch_slin_data_t *data);
 
 /*! 
   \brief Retrieve the unique identifier from the core
@@ -882,6 +889,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_exec(_In_ switch_core_sessio
 SWITCH_DECLARE(switch_status_t) switch_core_session_execute_application_get_flags(_In_ switch_core_session_t *session,
 																				  _In_ const char *app, _In_opt_z_ const char *arg, _Out_opt_ int32_t *flags);
 
+SWITCH_DECLARE(switch_status_t) switch_core_session_execute_application_async(switch_core_session_t *session, const char *app, const char *arg);
+
 SWITCH_DECLARE(switch_status_t) switch_core_session_get_app_flags(const char *app, int32_t *flags);
 
 /*! 
@@ -1023,6 +1032,11 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_queue_event(_In_ switch_core
   \return the number of events
 */
 SWITCH_DECLARE(uint32_t) switch_core_session_event_count(_In_ switch_core_session_t *session);
+
+/*
+  Number of parsable messages waiting on the session. 
+ */
+SWITCH_DECLARE(uint32_t) switch_core_session_messages_waiting(switch_core_session_t *session);
 
 /*! 
   \brief DE-Queue an event on a given session
@@ -2147,6 +2161,13 @@ SWITCH_DECLARE(switch_status_t) switch_cache_db_execute_sql(switch_cache_db_hand
 */
 SWITCH_DECLARE(switch_status_t) switch_cache_db_execute_sql_callback(switch_cache_db_handle_t *dbh, const char *sql,
 																	 switch_core_db_callback_func_t callback, void *pdata, char **err);
+
+/*!
+ \brief Get the affected rows of the last performed query
+ \param [in] dbh The handle
+ \param [out] the number of affected rows
+*/
+SWITCH_DECLARE(int) switch_cache_db_affected_rows(switch_cache_db_handle_t *dbh);
 
 /*! 
  \brief Provides some feedback as to the status of the db connection pool

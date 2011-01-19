@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -1109,6 +1109,8 @@ SWITCH_DECLARE(int) switch_sockaddr_equal(const switch_sockaddr_t *sa1, const sw
  */
 SWITCH_DECLARE(switch_status_t) switch_sockaddr_info_get(switch_sockaddr_t ** sa, const char *hostname,
 														 int32_t family, switch_port_t port, int32_t flags, switch_memory_pool_t *pool);
+
+SWITCH_DECLARE(switch_status_t) switch_sockaddr_create(switch_sockaddr_t **sa, switch_memory_pool_t *pool);
 
 /**
  * Send data over a network.

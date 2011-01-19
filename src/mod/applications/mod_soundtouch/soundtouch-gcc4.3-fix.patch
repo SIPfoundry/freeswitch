@@ -1,0 +1,11 @@
+diff -u -r soundtouch-1.3.1.orig/source/example/SoundStretch/WavFile.cpp soundtouch-1.3.1/source/example/SoundStretch/WavFile.cpp
+--- soundtouch-1.3.1.orig/source/example/SoundStretch/WavFile.cpp	2011-01-14 16:23:23.553700412 -0500
++++ soundtouch-1.3.1/source/example/SoundStretch/WavFile.cpp	2011-01-14 16:23:57.570382795 -0500
+@@ -45,6 +45,7 @@
+ //
+ ////////////////////////////////////////////////////////////////////////////////
+ 
++#include <cstring>
+ #include <stdio.h>
+ #include <stdexcept>
+ #include <string>

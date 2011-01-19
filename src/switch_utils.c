@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -372,7 +372,7 @@ SWITCH_DECLARE(char *) switch_find_end_paren(const char *s, char open, char clos
 	if (s && *s == open) {
 		depth++;
 		for (e = s + 1; e && *e; e++) {
-			if (*e == open) {
+			if (*e == open && open != close) {
 				depth++;
 			} else if (*e == close) {
 				depth--;
@@ -809,49 +809,65 @@ SWITCH_DECLARE(char *) switch_strip_whitespace(const char *str)
 {
 	const char *sp = str;
 	char *p, *s = NULL;
+	size_t len;
 
-	if (!sp)
-		return NULL;
+	if (zstr(sp)) {
+		return strdup(SWITCH_BLANK_STRING);
+	}
 
 	while ((*sp == 13 ) || (*sp == 10 ) || (*sp == 9 ) || (*sp == 32) || (*sp == 11) ) {
 		sp++;
 	}
+	
+	if (zstr(sp)) {
+		return strdup(SWITCH_BLANK_STRING);
+	}
 
 	s = strdup(sp);
+	switch_assert(s);
 
-	if (!s)
-		return NULL;
+	if ((len = strlen(s)) > 0) {
+		p = s + (len - 1);
 
-	p = s + (strlen(s) - 1);
-
-    while ((*p == 13 ) || (*p == 10 ) || (*p == 9 ) || (*p == 32) || (*p == 11) ) {
-		*p-- = '\0';
+		while ((p >= s) && ((*p == 13 ) || (*p == 10 ) || (*p == 9 ) || (*p == 32) || (*p == 11))) {
+			*p-- = '\0';
+		}
 	}
 
 	return s;
 }
 
-SWITCH_DECLARE(char *) switch_strip_spaces(const char *str)
+SWITCH_DECLARE(char *) switch_strip_spaces(char *str, switch_bool_t dup)
 {
-	const char *sp = str;
+	char *sp = str;
 	char *p, *s = NULL;
+	size_t len;
 
-	if (!sp)
-		return NULL;
+	if (zstr(sp)) {
+		return dup ? strdup(SWITCH_BLANK_STRING) : sp;
+	}
 
 	while (*sp == ' ') {
 		sp++;
 	}
 
-	s = strdup(sp);
+	if (dup) {
+		s = strdup(sp);
+		switch_assert(s);
+	} else {
+		s = sp;
+	}
 
-	if (!s)
-		return NULL;
+	if (zstr(s)) {
+		return s;
+	}
 
-	p = s + (strlen(s) - 1);
+	if ((len = strlen(s)) > 0) {
+		p = s + (len - 1);
 
-	while (*p == ' ') {
-		*p-- = '\0';
+		while (p && *p && (p >= s) && *p == ' ') {
+			*p-- = '\0';
+		}
 	}
 
 	return s;

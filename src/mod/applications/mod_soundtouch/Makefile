@@ -12,6 +12,7 @@ include $(BASE)/build/modmake.rules
 $(BUILD_DIRECTORY)/Makefile $(BUILD_DIRECTORY)/config.status:
 	$(GETLIB) $(VERSION).tar.gz
 	mkdir -p $(BUILD_DIRECTORY)
+	patch -d $(BUILD_DIRECTORY) -p1 < soundtouch-gcc4.3-fix.patch
 	cd $(BUILD_DIRECTORY) && $(DEFAULT_VARS) $(DIRECTORY)/configure $(DEFAULT_ARGS) --enable-integer-samples --srcdir=$(DIRECTORY)
 	$(TOUCH_TARGET)
 

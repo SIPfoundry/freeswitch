@@ -50,7 +50,7 @@
 /******************************************************************************/
 
 /* DEFINES ********************************************************************/
-#define MAX_NAME_LEN			10
+#define MAX_NAME_LEN			25
 #define MAX_PATH				255
 
 #define MAX_CIC_LENGTH			5
@@ -224,6 +224,7 @@ typedef struct sng_isup_intf {
 	uint32_t		isap;
 	uint32_t		clg_nadi;
 	uint32_t		cld_nadi;
+	uint32_t		min_digits;
 	uint16_t		t4;
 	uint32_t		t10;
 	uint32_t		t11;
@@ -326,7 +327,6 @@ typedef struct sng_ss7_cfg {
 typedef struct ftdm_sngss7_data {
 	sng_ss7_cfg_t		cfg;
 	int					gen_config;
-	int					min_digits;
 	int					function_trace;
 	int					function_trace_level;
 	int					message_trace;
@@ -452,7 +452,7 @@ extern int				cmbLinkSetId;
 
 /* PROTOTYPES *****************************************************************/
 /* in ftmod_sangoma_ss7_main.c */
-void ftdm_sangoma_ss7_process_state_change (ftdm_channel_t *ftdmchan);
+ftdm_status_t ftdm_sangoma_ss7_process_state_change (ftdm_channel_t *ftdmchan);
 
 /* in ftmod_sangoma_ss7_logger.c */
 void handle_sng_log(uint8_t level, char *fmt,...);

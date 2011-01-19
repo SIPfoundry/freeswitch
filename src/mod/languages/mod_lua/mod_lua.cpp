@@ -1,6 +1,6 @@
 /* 
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2010, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2011, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -450,7 +450,7 @@ SWITCH_STANDARD_API(lua_api_function)
 			if (switch_event_get_header(stream->param_event, "http-host")) {
 				stream->write_function(stream, "Content-Type: text/html\n\n<H2>Error Executing Script</H2>");
 			} else {
-				stream->write_function(stream, "-ERR encounterd\n");
+				stream->write_function(stream, "-ERR encountered\n");
 			}
 		}
 		lua_uninit(L);
