@@ -192,6 +192,24 @@ static ftdm_status_t parse_signalling(const char* signalling, ftdm_span_t *span)
 	return FTDM_SUCCESS;
 }
 
+static ftdm_status_t parse_early_media(const char* opt, ftdm_span_t *span)
+{
+	sngisdn_span_data_t *signal_data = (sngisdn_span_data_t*) span->signal_data;
+	if (!strcasecmp(opt, "on-proceed")) {
+		signal_data->early_media_flags |= SNGISDN_EARLY_MEDIA_ON_PROCEED;
+	} else if (!strcasecmp(opt, "on-progress")) {
+		signal_data->early_media_flags |= SNGISDN_EARLY_MEDIA_ON_PROGRESS;
+	} else if (!strcasecmp(opt, "on-alert")) {
+		signal_data->early_media_flags |= SNGISDN_EARLY_MEDIA_ON_ALERT;
+	} else {
+		ftdm_log(FTDM_LOG_ERROR, "Unsupported early-media option %s\n", opt);
+		return FTDM_FAIL;
+	}
+	ftdm_log(FTDM_LOG_DEBUG, "Early media opt:0x%x\n", signal_data->early_media_flags);
+	return FTDM_SUCCESS;
+}
+
+
 static ftdm_status_t set_switchtype_defaults(ftdm_span_t *span)
 {
 	sngisdn_span_data_t *signal_data = (sngisdn_span_data_t*) span->signal_data;
@@ -248,6 +266,7 @@ static ftdm_status_t set_switchtype_defaults(ftdm_span_t *span)
 	}
 	return FTDM_SUCCESS;
 }
+
 
 ftdm_status_t ftmod_isdn_parse_cfg(ftdm_conf_parameter_t *ftdm_parameters, ftdm_span_t *span)
 {
@@ -326,9 +345,11 @@ ftdm_status_t ftmod_isdn_parse_cfg(ftdm_conf_parameter_t *ftdm_parameters, ftdm_
 			ftdm_set_ton(val, &span->default_caller_data.rdnis.type);
 		} else if (!strcasecmp(var, "outbound-rdnis-npi")) {
 			ftdm_set_npi(val, &span->default_caller_data.rdnis.plan);
-		} else if (!strcasecmp(var, "outbound-bearer_cap")) {
+		} else if (!strcasecmp(var, "outbound-bearer_cap") ||
+					!strcasecmp(var, "outbound-bc-transfer-cap")) {
 			ftdm_set_bearer_capability(val, (uint8_t*)&span->default_caller_data.bearer_capability);
-		} else if (!strcasecmp(var, "outbound-bearer_layer1")) {
+		} else if (!strcasecmp(var, "outbound-bearer_layer1") ||
+					!strcasecmp(var, "outbound-bc-user-layer1")) {
 			ftdm_set_bearer_layer1(val, (uint8_t*)&span->default_caller_data.bearer_layer1);
 		} else if (!strcasecmp(var, "channel-restart-on-link-up")) {
 			parse_yesno(var, val, &signal_data->restart_opt);
@@ -349,10 +370,14 @@ ftdm_status_t ftmod_isdn_parse_cfg(ftdm_conf_parameter_t *ftdm_parameters, ftdm_
 			parse_yesno(var, val, &signal_data->raw_trace_q931);
 		} else if (!strcasecmp(var, "q921-raw-trace")) {
 			parse_yesno(var, val, &signal_data->raw_trace_q921);
+		} else if (!strcasecmp(var, "early-media-override")) {
+			if (parse_early_media(val, span) != FTDM_SUCCESS) {
+				return FTDM_FAIL;
+			}
 		} else {
 			ftdm_log(FTDM_LOG_WARNING, "Ignoring unknown parameter %s\n", ftdm_parameters[paramindex].var);
 		}
-	}
+	} /* for (paramindex = 0; ftdm_parameters[paramindex].var; paramindex++) */
 	
 	if (signal_data->switchtype == SNGISDN_SWITCH_INVALID) {
 		ftdm_log(FTDM_LOG_ERROR, "%s: switchtype not specified", span->name);
@@ -364,10 +389,11 @@ ftdm_status_t ftmod_isdn_parse_cfg(ftdm_conf_parameter_t *ftdm_parameters, ftdm_
 	}
 
 	if (span->default_caller_data.bearer_layer1 == FTDM_INVALID_INT_PARM) {
-		if (signal_data->switchtype == SNGISDN_SWITCH_EUROISDN) {
-			span->default_caller_data.bearer_layer1 = IN_UIL1_G711ULAW;
-		} else {
+		if (signal_data->switchtype == SNGISDN_SWITCH_EUROISDN ||
+			signal_data->switchtype == SNGISDN_SWITCH_QSIG) {
 			span->default_caller_data.bearer_layer1 = IN_UIL1_G711ALAW;
+		} else {
+			span->default_caller_data.bearer_layer1 = IN_UIL1_G711ULAW;
 		}
 	}
 	return FTDM_SUCCESS;

@@ -230,6 +230,8 @@ static unsigned wp_open_range(ftdm_span_t *span, unsigned spanno, unsigned start
 		ftdm_channel_t *chan;
 		ftdm_socket_t sockfd = FTDM_INVALID_SOCKET;
 		const char *dtmf = "none";
+		const char *hwec_str = "none";
+		const char *hwec_idle = "none";
 		if (!strncasecmp(span->name, "smg_prid_nfas", 8) && span->trunk_type == FTDM_TRUNK_T1 && x == 24) {
 #ifdef LIBSANGOMA_VERSION
 			sockfd = __tdmv_api_open_span_chan(spanno, x);
@@ -237,7 +239,11 @@ static unsigned wp_open_range(ftdm_span_t *span, unsigned spanno, unsigned start
 			ftdm_log(FTDM_LOG_ERROR, "span %d channel %d cannot be configured as smg_prid_nfas, you need to compile freetdm with newer libsangoma\n", spanno, x);
 #endif
 		} else {
+#ifdef LIBSANGOMA_VERSION
+			sockfd = __tdmv_api_open_span_chan(spanno, x);
+#else
 			sockfd = tdmv_api_open_span_chan(spanno, x);
+#endif
 		}
 
 		if (sockfd == FTDM_INVALID_SOCKET) {
@@ -271,6 +277,8 @@ static unsigned wp_open_range(ftdm_span_t *span, unsigned spanno, unsigned start
 			|| type == FTDM_CHAN_TYPE_B) {
 				int err;
 				
+				hwec_str = "unavailable";
+				hwec_idle = "enabled";
 				dtmf = "software";
 
 				err = sangoma_tdm_get_hw_coding(chan->sockfd, &tdm_api);
@@ -289,6 +297,7 @@ static unsigned wp_open_range(ftdm_span_t *span, unsigned spanno, unsigned start
 
 				err = sangoma_tdm_get_hw_ec(chan->sockfd, &tdm_api);
 				if (err > 0) {
+					hwec_str = "available";
 					ftdm_channel_set_feature(chan, FTDM_CHANNEL_FEATURE_HWEC);
 				}
 				
@@ -296,6 +305,7 @@ static unsigned wp_open_range(ftdm_span_t *span, unsigned spanno, unsigned start
 				err = sangoma_tdm_get_hwec_persist_status(chan->sockfd, &tdm_api);
 				if (err == 0) {
 					ftdm_channel_set_feature(chan, FTDM_CHANNEL_FEATURE_HWEC_DISABLED_ON_IDLE);
+					hwec_idle = "disabled";
 				}
 #else
 				if (span->trunk_type ==  FTDM_TRUNK_BRI || span->trunk_type ==  FTDM_TRUNK_BRI_PTMP) {
@@ -365,7 +375,8 @@ static unsigned wp_open_range(ftdm_span_t *span, unsigned spanno, unsigned start
 				ftdm_copy_string(chan->chan_number, number, sizeof(chan->chan_number));
 			}
 			configured++;
-			ftdm_log_chan(chan, FTDM_LOG_INFO, "Configured wanpipe device fd:%d DTMF: %s\n", sockfd, dtmf);
+			ftdm_log_chan(chan, FTDM_LOG_INFO, "Configured wanpipe device FD: %d, DTMF: %s, HWEC: %s, HWEC_IDLE: %s\n", 
+					sockfd, dtmf, hwec_str, hwec_idle);
 
 		} else {
 			ftdm_log(FTDM_LOG_ERROR, "ftdm_span_add_channel failed for wanpipe span %d channel %d\n", spanno, x);
@@ -652,6 +663,8 @@ static FIO_COMMAND_FUNCTION(wanpipe_command)
 				return FTDM_FAIL;
 			}
 		}
+		break;
+	case FTDM_COMMAND_DISABLE_ECHOTRAIN: { err = 0; }
 		break;
 	case FTDM_COMMAND_ENABLE_DTMF_DETECT:
 		{
@@ -1179,7 +1192,7 @@ static FIO_GET_ALARMS_FUNCTION(wanpipe_get_alarms)
 	unsigned int alarms = 0;
 	int err;
 
-	memset(&tdm_api,0,sizeof(tdm_api));
+	memset(&tdm_api, 0, sizeof(tdm_api));
 
 #ifdef LIBSANGOMA_VERSION
 	if ((err = sangoma_tdm_get_fe_alarms(ftdmchan->sockfd, &tdm_api, &alarms))) {
@@ -1225,9 +1238,19 @@ static FIO_GET_ALARMS_FUNCTION(wanpipe_get_alarms)
 		alarms &= ~WAN_TE_BIT_ALARM_RAI;
 	}
 
+	if (!ftdmchan->alarm_flags) {
+		if (FTDM_IS_DIGITAL_CHANNEL(ftdmchan)) {
+			ftdm_channel_hw_link_status_t sangoma_status = 0;
+			/* there is a bug in wanpipe where alarms were not properly set when they should be
+			 * on at application startup, until that is fixed we check the link status here too */
+			ftdm_channel_command(ftdmchan, FTDM_COMMAND_GET_LINK_STATUS, &sangoma_status);
+			ftdmchan->alarm_flags = sangoma_status == FTDM_HW_LINK_DISCONNECTED ? 1 : 0;
+			ftdm_log_chan(ftdmchan, FTDM_LOG_DEBUG, "Link status is %d\n", sangoma_status);
+		}
+	}
+
 	if (alarms) {
-		/* FIXME: investigate what else does the driver report */
-		ftdm_log(FTDM_LOG_DEBUG, "Unmapped wanpipe alarms: %d\n", alarms);
+		ftdm_log_chan(ftdmchan, FTDM_LOG_DEBUG, "Unmapped wanpipe alarms: %d\n", alarms);
 	}
 
 	return FTDM_SUCCESS;
@@ -1249,12 +1272,16 @@ static __inline__ ftdm_status_t wanpipe_channel_process_event(ftdm_channel_t *fc
 		{
 			switch(tdm_api->wp_tdm_cmd.event.wp_tdm_api_event_link_status) {
 			case WP_TDMAPI_EVENT_LINK_STATUS_CONNECTED:
-				*event_id = FTDM_OOB_ALARM_CLEAR;
+				/* *event_id = FTDM_OOB_ALARM_CLEAR; */
+				ftdm_log_chan_msg(fchan, FTDM_LOG_DEBUG, "Ignoring wanpipe link connected event\n");
 				break;
 			default:
-				*event_id = FTDM_OOB_ALARM_TRAP;
+				/* *event_id = FTDM_OOB_ALARM_TRAP; */
+				ftdm_log_chan_msg(fchan, FTDM_LOG_DEBUG, "Ignoring wanpipe link disconnected event\n");
 				break;
 			};
+			/* The WP_API_EVENT_ALARM event should be used to clear alarms */
+			*event_id = FTDM_OOB_NOOP;
 		}
 		break;
 
@@ -1343,8 +1370,13 @@ static __inline__ ftdm_status_t wanpipe_channel_process_event(ftdm_channel_t *fc
 		break;
 	case WP_API_EVENT_ALARM:
 		{
-			ftdm_log_chan(fchan, FTDM_LOG_DEBUG, "Got wanpipe alarms %d\n", tdm_api->wp_tdm_cmd.event.wp_api_event_alarm);
-			*event_id = FTDM_OOB_ALARM_TRAP;
+			if (tdm_api->wp_tdm_cmd.event.wp_api_event_alarm) {
+				ftdm_log_chan(fchan, FTDM_LOG_DEBUG, "Got Wanpipe alarms %d\n", tdm_api->wp_tdm_cmd.event.wp_api_event_alarm);
+				*event_id = FTDM_OOB_ALARM_TRAP;
+			} else {
+				ftdm_log_chan_msg(fchan, FTDM_LOG_DEBUG, "Wanpipe alarms cleared\n");
+				*event_id = FTDM_OOB_ALARM_CLEAR;
+			}
 		}
 		break;
 	case WP_API_EVENT_POLARITY_REVERSE:

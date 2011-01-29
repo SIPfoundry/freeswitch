@@ -808,6 +808,18 @@ void sofia_event_callback(nua_event_t event,
 		}
 	}
 	
+	if ((event == nua_i_invite) && (!session)) {
+		uint32_t sess_count = switch_core_session_count();
+		uint32_t sess_max = switch_core_session_limit(0);
+		
+		if (sess_count >= sess_max || !sofia_test_pflag(profile, PFLAG_RUNNING) || !switch_core_ready()) {
+			nua_respond(nh, 503, "Maximum Calls In Progress", SIPTAG_RETRY_AFTER_STR("300"), TAG_END());
+
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "No more sessions allowed at this time.\n");
+
+			goto done;
+		}
+	}
 	
 	if (sofia_test_pflag(profile, PFLAG_AUTH_ALL) && tech_pvt && tech_pvt->key && sip) {
 		sip_authorization_t const *authorization = NULL;
@@ -2419,6 +2431,17 @@ switch_status_t reconfig_sofia(sofia_profile_t *profile)
 						} else {
 							sofia_clear_pflag(profile, PFLAG_PRESENCE_PROBE_ON_REGISTER);
 						}
+
+					} else if (!strcasecmp(var, "send-presence-on-register")) {
+						if (switch_true(val)) {
+							sofia_set_pflag(profile, PFLAG_PRESENCE_ON_REGISTER);
+						} else if (!strcasecmp(val, "first-only")) {
+							sofia_clear_pflag(profile, PFLAG_PRESENCE_ON_REGISTER);
+							sofia_set_pflag(profile, PFLAG_PRESENCE_ON_FIRST_REGISTER);
+						} else {
+							sofia_clear_pflag(profile, PFLAG_PRESENCE_ON_REGISTER);
+							sofia_clear_pflag(profile, PFLAG_PRESENCE_ON_FIRST_REGISTER);
+						}
 					} else if (!strcasecmp(var, "cid-in-1xx")) {
 						if (switch_true(val)) {
 							sofia_set_pflag(profile, PFLAG_CID_IN_1XX);
@@ -3008,6 +3031,7 @@ switch_status_t config_sofia(int reload, char *profile_name)
 				sofia_set_pflag(profile, PFLAG_PASS_CALLEE_ID);
 				sofia_set_pflag(profile, PFLAG_MESSAGE_QUERY_ON_FIRST_REGISTER);
 				sofia_set_pflag(profile, PFLAG_SQL_IN_TRANS);
+				sofia_set_pflag(profile, PFLAG_PRESENCE_ON_REGISTER);
 				profile->shutdown_type = "false";
 				profile->local_network = "localnet.auto";
 				sofia_set_flag(profile, TFLAG_ENABLE_SOA);
@@ -3089,6 +3113,16 @@ switch_status_t config_sofia(int reload, char *profile_name)
 							sofia_set_pflag(profile, PFLAG_PRESENCE_PROBE_ON_REGISTER);
 						} else {
 							sofia_clear_pflag(profile, PFLAG_PRESENCE_PROBE_ON_REGISTER);
+						}
+					} else if (!strcasecmp(var, "send-presence-on-register")) {
+						if (switch_true(val)) {
+							sofia_set_pflag(profile, PFLAG_PRESENCE_ON_REGISTER);
+						} else if (!strcasecmp(val, "first-only")) {
+							sofia_clear_pflag(profile, PFLAG_PRESENCE_ON_REGISTER);
+							sofia_set_pflag(profile, PFLAG_PRESENCE_ON_FIRST_REGISTER);
+						} else {
+							sofia_clear_pflag(profile, PFLAG_PRESENCE_ON_REGISTER);
+							sofia_clear_pflag(profile, PFLAG_PRESENCE_ON_FIRST_REGISTER);
 						}
 					} else if (!strcasecmp(var, "cid-in-1xx")) {
 						if (switch_true(val)) {
