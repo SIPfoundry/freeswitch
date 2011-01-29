@@ -606,16 +606,16 @@ void sofia_reg_expire_call_id(sofia_profile_t *profile, const char *call_id, int
 	sql = switch_mprintf("select call_id,sip_user,sip_host,contact,status,rpid,expires"
 						 ",user_agent,server_user,server_host,profile_name,network_ip"
 						 ",%d from sip_registrations where call_id='%q' %s", reboot, call_id, sqlextra);
-	switch_safe_free(sqlextra);
 
 	switch_mutex_lock(profile->ireg_mutex);
 	sofia_glue_execute_sql_callback(profile, NULL, sql, sofia_reg_del_callback, profile);
 	switch_mutex_unlock(profile->ireg_mutex);
 	switch_safe_free(sql);
 
-	sql = switch_mprintf("delete from sip_registrations where call_id='%q' or (sip_user='%q' and sip_host='%q')", call_id, user, host);
+	sql = switch_mprintf("delete from sip_registrations where call_id='%q' %s", call_id, sqlextra);
 	sofia_glue_execute_sql_now(profile, &sql, SWITCH_FALSE);
 
+	switch_safe_free(sqlextra);
 	switch_safe_free(sql);
 	switch_safe_free(dup);
 
@@ -875,8 +875,18 @@ uint8_t sofia_reg_handle_register(nua_t *nua, sofia_profile_t *profile, nua_hand
 	long reg_count = 0;
 	int delete_subs;
 	const char *agent = "unknown";
-		
+	const char *pres_on_reg = NULL;
+	int send_pres = 0;
+
 	delete_subs = sofia_test_pflag(profile, PFLAG_DEL_SUBS_ON_REG);
+
+	if (v_event && *v_event) pres_on_reg = switch_event_get_header(*v_event, "send-presence-on-register");
+
+	if (!(send_pres = switch_true(pres_on_reg))) {
+		if (pres_on_reg && !strcasecmp(pres_on_reg, "first-only")) {
+			send_pres = 2;
+		}
+	}
 
 	/* all callers must confirm that sip, sip->sip_request and sip->sip_contact are not NULL */
 	switch_assert(sip != NULL && sip->sip_contact != NULL && sip->sip_request != NULL);
@@ -1129,7 +1139,13 @@ uint8_t sofia_reg_handle_register(nua_t *nua, sofia_profile_t *profile, nua_hand
 					switch_url_encode(my_contact_str, path_encoded + 20, path_encoded_len - 20);
 					reg_desc = "Registered(AUTO-NAT-2.0)";
 					exptime = 30;
-					switch_snprintf(contact_str + strlen(contact_str), sizeof(contact_str) - strlen(contact_str), "%s", path_encoded);
+
+					/* place fs_path (the encoded path) inside the <...> of the contact string, if possible */
+					if (contact_str[strlen(contact_str) - 1] == '>') {
+						switch_snprintf(contact_str + strlen(contact_str) - 1, sizeof(contact_str) - strlen(contact_str) + 1, "%s>", path_encoded);
+					} else {
+						switch_snprintf(contact_str + strlen(contact_str), sizeof(contact_str) - strlen(contact_str), "%s", path_encoded);
+					}
 					free(path_encoded);
 				} else {
 					if (*received_data && sofia_test_pflag(profile, PFLAG_RECIEVED_IN_NAT_REG_CONTACT)) {
@@ -1405,7 +1421,6 @@ uint8_t sofia_reg_handle_register(nua_t *nua, sofia_profile_t *profile, nua_hand
 			}
 		}
 
-		
 		if (send && switch_event_create(&event, SWITCH_EVENT_PRESENCE_IN) == SWITCH_STATUS_SUCCESS) {
 			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "proto", SOFIA_CHAT_PROTO);
 			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "rpid", rpid);
@@ -1493,27 +1508,31 @@ uint8_t sofia_reg_handle_register(nua_t *nua, sofia_profile_t *profile, nua_hand
 				}
 			}
 
-			if (sofia_test_pflag(profile, PFLAG_PRESENCE_PROBE_ON_REGISTER)) {
-				if (switch_event_create(&s_event, SWITCH_EVENT_PRESENCE_PROBE) == SWITCH_STATUS_SUCCESS) {
-					switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "proto", SOFIA_CHAT_PROTO);
-					switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "login", profile->name);
-					switch_event_add_header(s_event, SWITCH_STACK_BOTTOM, "from", "%s@%s", to_user, sub_host);
-					switch_event_add_header(s_event, SWITCH_STACK_BOTTOM, "to", "%s@%s", to_user, sub_host);
-					switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "event_type", "presence");
-					switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "alt_event_type", "dialog");
-					switch_event_fire(&s_event);
+			if (sofia_test_pflag(profile, PFLAG_PRESENCE_ON_REGISTER) || 
+				(reg_count == 1 && sofia_test_pflag(profile, PFLAG_PRESENCE_ON_FIRST_REGISTER)) 
+				|| send_pres == 1 || (reg_count == 1 && send_pres == 2)) {
+				
+				if (sofia_test_pflag(profile, PFLAG_PRESENCE_PROBE_ON_REGISTER)) {
+					if (switch_event_create(&s_event, SWITCH_EVENT_PRESENCE_PROBE) == SWITCH_STATUS_SUCCESS) {
+						switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "proto", SOFIA_CHAT_PROTO);
+						switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "login", profile->name);
+						switch_event_add_header(s_event, SWITCH_STACK_BOTTOM, "from", "%s@%s", to_user, sub_host);
+						switch_event_add_header(s_event, SWITCH_STACK_BOTTOM, "to", "%s@%s", to_user, sub_host);
+						switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "event_type", "presence");
+						switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "alt_event_type", "dialog");
+						switch_event_fire(&s_event);
+					}
+				} else {
+					if (switch_event_create(&s_event, SWITCH_EVENT_PRESENCE_IN) == SWITCH_STATUS_SUCCESS) {
+						switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "proto", SOFIA_CHAT_PROTO);
+						switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "login", profile->name);
+						switch_event_add_header(s_event, SWITCH_STACK_BOTTOM, "from", "%s@%s", to_user, sub_host);
+						switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "rpid", "unknown");
+						switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "status", "Registered");
+						switch_event_fire(&s_event);
+					}		
 				}
-			} else {
-				if (switch_event_create(&s_event, SWITCH_EVENT_PRESENCE_IN) == SWITCH_STATUS_SUCCESS) {
-					switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "proto", SOFIA_CHAT_PROTO);
-					switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "login", profile->name);
-					switch_event_add_header(s_event, SWITCH_STACK_BOTTOM, "from", "%s@%s", to_user, sub_host);
-					switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "rpid", "unknown");
-					switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "status", "Registered");
-					switch_event_fire(&s_event);
-				}		
 			}
-			
 		} else {
 			if (switch_event_create_subclass(&s_event, SWITCH_EVENT_CUSTOM, MY_EVENT_UNREGISTER) == SWITCH_STATUS_SUCCESS) {
 				switch_event_add_header_string(s_event, SWITCH_STACK_BOTTOM, "profile-name", profile->name);

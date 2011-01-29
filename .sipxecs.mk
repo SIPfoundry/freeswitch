@@ -1,10 +1,7 @@
-# format:  ${number of commits past tag}.${refid of HEAD}
 freeswitch_VER = 1.0.7
-freeswitch_REV = $(shell \
-	cd $(SRC)/$(PROJ); \
-	$(SRC)/config/revision-gen $(freeswitch_VER))
+freeswitch_PACKAGE_REVISION = $(shell cd $(SRC)/$(PROJ); ../config/revision-gen $(freeswitch_VER))
 
-freeswitch_SRPM = freeswitch-$(freeswitch_VER)-$(freeswitch_REV).src.rpm
+freeswitch_SRPM = freeswitch-$(freeswitch_VER)-$(freeswitch_PACKAGE_REVISION).src.rpm
 freeswitch_SPEC = $(SRC)/$(PROJ)/freeswitch.spec
 freeswitch_TARBALL = $(BUILDDIR)/$(PROJ)/freeswitch-$(freeswitch_VER).tar.bz2
 freeswitch_SOURCES = $(freeswitch_TARBALL) \

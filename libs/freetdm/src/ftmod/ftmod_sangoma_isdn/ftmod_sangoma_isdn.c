@@ -120,7 +120,7 @@ ftdm_state_map_t sangoma_isdn_state_map = {
 		ZSD_INBOUND,
 		ZSM_UNACCEPTABLE,
 		{FTDM_CHANNEL_STATE_RING, FTDM_END},
-		{FTDM_CHANNEL_STATE_TERMINATING, FTDM_CHANNEL_STATE_HANGUP, FTDM_CHANNEL_STATE_PROCEED, FTDM_CHANNEL_STATE_RINGING, FTDM_CHANNEL_STATE_PROGRESS, FTDM_END}
+		{FTDM_CHANNEL_STATE_TERMINATING, FTDM_CHANNEL_STATE_HANGUP, FTDM_CHANNEL_STATE_PROCEED, FTDM_CHANNEL_STATE_RINGING, FTDM_CHANNEL_STATE_PROGRESS, FTDM_CHANNEL_STATE_PROGRESS_MEDIA, FTDM_END}
 	},
 	{
 		ZSD_INBOUND,
@@ -394,8 +394,7 @@ static void *ftdm_sangoma_isdn_dchan_run(ftdm_thread_t *me, void *obj)
 			default:
 				ftdm_log_chan_msg(dchan, FTDM_LOG_CRIT, "Unhandled IO event\n");
 		}
-	}
-	ftdm_channel_close(&dchan);
+	}	
 	return NULL;
 }
 
@@ -677,6 +676,9 @@ static ftdm_status_t ftdm_sangoma_isdn_process_state_change(ftdm_channel_t *ftdm
 				/*OUTBOUND...so we were told by the line of this so noifiy the user*/
 				sigev.event_id = FTDM_SIGEVENT_PROCEED;
 				ftdm_span_send_signal(ftdmchan->span, &sigev);
+				if (sngisdn_test_flag(sngisdn_info, FLAG_MEDIA_READY)) {
+					ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_PROGRESS_MEDIA);
+				}
 			} else {
 				if (!sngisdn_test_flag(sngisdn_info, FLAG_SENT_PROCEED)) {
 					/* By default, we do not send a progress indicator in the proceed */

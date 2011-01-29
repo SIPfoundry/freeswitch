@@ -404,38 +404,38 @@ static __inline__ void ftdm_std_free(void *pool, void *ptr)
 	free(ptr);
 }
 
-static void ftdm_set_echocancel_call_begin(ftdm_channel_t *chan)
+FT_DECLARE(void) ftdm_set_echocancel_call_begin(ftdm_channel_t *chan)
 {
 	ftdm_caller_data_t *caller_data = ftdm_channel_get_caller_data(chan);
 	if (ftdm_channel_test_feature(chan, FTDM_CHANNEL_FEATURE_HWEC)) {
 		if (ftdm_channel_test_feature(chan, FTDM_CHANNEL_FEATURE_HWEC_DISABLED_ON_IDLE)) {
+			/* If the ec is disabled on idle, we need to enable it unless is a digital call */
 			if (caller_data->bearer_capability != FTDM_BEARER_CAP_64K_UNRESTRICTED) {
+				ftdm_log_chan(chan, FTDM_LOG_DEBUG, "Enabling ec for call in channel state %s\n", ftdm_channel_state2str(chan->state));
 				ftdm_channel_command(chan, FTDM_COMMAND_ENABLE_ECHOCANCEL, NULL);
 			}
 		} else {
+			/* If the ec is enabled on idle, we do nothing unless is a digital call that needs it disabled */
 			if (caller_data->bearer_capability == FTDM_BEARER_CAP_64K_UNRESTRICTED) {
+				ftdm_log_chan(chan, FTDM_LOG_DEBUG, "Disabling ec for digital call in channel state %s\n", ftdm_channel_state2str(chan->state));
 				ftdm_channel_command(chan, FTDM_COMMAND_DISABLE_ECHOCANCEL, NULL);
 			}
 		}
 	}
 }
 
-static void ftdm_set_echocancel_call_end(ftdm_channel_t *chan)
+FT_DECLARE(void) ftdm_set_echocancel_call_end(ftdm_channel_t *chan)
 {
-	ftdm_caller_data_t *caller_data = ftdm_channel_get_caller_data(chan);
 	if (ftdm_channel_test_feature(chan, FTDM_CHANNEL_FEATURE_HWEC)) {
 		if (ftdm_channel_test_feature(chan, FTDM_CHANNEL_FEATURE_HWEC_DISABLED_ON_IDLE)) {
-			if (caller_data->bearer_capability != FTDM_BEARER_CAP_64K_UNRESTRICTED) {
-				ftdm_channel_command(chan, FTDM_COMMAND_DISABLE_ECHOCANCEL, NULL);
-			}
+			ftdm_log_chan(chan, FTDM_LOG_DEBUG, "Disabling ec on call end in channel state %s\n", ftdm_channel_state2str(chan->state));
+			ftdm_channel_command(chan, FTDM_COMMAND_DISABLE_ECHOCANCEL, NULL);
 		} else {
-			if (caller_data->bearer_capability == FTDM_BEARER_CAP_64K_UNRESTRICTED) {
-				ftdm_channel_command(chan, FTDM_COMMAND_ENABLE_ECHOCANCEL, NULL);
-			}
+			ftdm_log_chan(chan, FTDM_LOG_DEBUG, "Enabling ec back on call end in channel state %s\n", ftdm_channel_state2str(chan->state));
+			ftdm_channel_command(chan, FTDM_COMMAND_ENABLE_ECHOCANCEL, NULL);
 		}
 	}
 }
-
 
 FT_DECLARE_DATA ftdm_memory_handler_t g_ftdm_mem_handler = 
 {
@@ -682,42 +682,53 @@ FT_DECLARE(ftdm_status_t) ftdm_channel_get_alarms(ftdm_channel_t *ftdmchan, ftdm
 {
 	ftdm_status_t status = FTDM_FAIL;
 
-	ftdm_assert_return(alarmbits != NULL, FTDM_FAIL, "null argument\n");
+	ftdm_assert_return(alarmbits != NULL, FTDM_EINVAL, "null alarmbits argument\n");
+	ftdm_assert_return(ftdmchan != NULL, FTDM_EINVAL, "null channel argument\n");
+	ftdm_assert_return(ftdmchan->span != NULL, FTDM_EINVAL, "null span\n");
+	ftdm_assert_return(ftdmchan->span->fio != NULL, FTDM_EINVAL, "null io\n");
 
 	*alarmbits = FTDM_ALARM_NONE;
 
+	if (!ftdmchan->span->fio->get_alarms) {
+		ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "No get_alarms interface for this channel\n");
+		return FTDM_ENOSYS;
+	}
+
+	if (!ftdm_test_flag(ftdmchan, FTDM_CHANNEL_CONFIGURED)) {
+		ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "Cannot get alarms from an unconfigured channel\n");
+		return FTDM_EINVAL;
+	}
+
 	ftdm_channel_lock(ftdmchan);
 
-	if (ftdm_test_flag(ftdmchan, FTDM_CHANNEL_CONFIGURED)) {
-		if (ftdmchan->span->fio->get_alarms) {
-			if ((status = ftdmchan->span->fio->get_alarms(ftdmchan)) == FTDM_SUCCESS) {
-				*ftdmchan->last_error = '\0';
-				*alarmbits = ftdmchan->alarm_flags;
-				if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_RED)) {
-					snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "RED/");
-				}
-				if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_YELLOW)) {
-					snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "YELLOW/");
-				}
-				if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_RAI)) {
-					snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "RAI/");
-				}
-				if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_BLUE)) {
-					snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "BLUE/");
-				}
-				if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_AIS)) {
-					snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "AIS/");
-				}
-				if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_GENERAL)) {
-					snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "GENERAL");
-				}
-				*(ftdmchan->last_error + strlen(ftdmchan->last_error) - 1) = '\0';
-
-			}
-		} else {
-			status = FTDM_NOTIMPL;
-		}
+	if ((status = ftdmchan->span->fio->get_alarms(ftdmchan)) != FTDM_SUCCESS) {
+		ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "Failed to get alarms from channel\n");
+		goto done;
 	}
+
+	*ftdmchan->last_error = '\0';
+	*alarmbits = ftdmchan->alarm_flags;
+	if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_RED)) {
+		snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "RED/");
+	}
+	if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_YELLOW)) {
+		snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "YELLOW/");
+	}
+	if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_RAI)) {
+		snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "RAI/");
+	}
+	if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_BLUE)) {
+		snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "BLUE/");
+	}
+	if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_AIS)) {
+		snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "AIS/");
+	}
+	if (ftdm_test_alarm_flag(ftdmchan, FTDM_ALARM_GENERAL)) {
+		snprintf(ftdmchan->last_error + strlen(ftdmchan->last_error), sizeof(ftdmchan->last_error) - strlen(ftdmchan->last_error), "GENERAL");
+	}
+	*(ftdmchan->last_error + strlen(ftdmchan->last_error) - 1) = '\0';
+
+done:
 
 	ftdm_channel_unlock(ftdmchan);	
 
@@ -2283,13 +2294,13 @@ FT_DECLARE(ftdm_status_t) _ftdm_channel_call_indicate(const char *file, const ch
 
 	ftdm_assert_return(ftdmchan, FTDM_FAIL, "Null channel\n");
 
-	ftdm_log_chan(ftdmchan, FTDM_LOG_DEBUG, "Indicating %s in state %s\n",
+	ftdm_log_chan_ex(ftdmchan, file, func, line, FTDM_LOG_LEVEL_DEBUG, "Indicating %s in state %s\n",
 			ftdm_channel_indication2str(indication), ftdm_channel_state2str(ftdmchan->state));
 
 	ftdm_channel_lock(ftdmchan);
 
 	if (ftdm_test_flag(ftdmchan, FTDM_CHANNEL_IND_ACK_PENDING)) {
-		ftdm_log_chan(ftdmchan, FTDM_LOG_WARNING, "Cannot indicate %s in channel with indication %s still pending in state %s\n",
+		ftdm_log_chan_ex(ftdmchan, file, func, line, FTDM_LOG_LEVEL_WARNING, "Cannot indicate %s in channel with indication %s still pending in state %s\n",
 				ftdm_channel_indication2str(indication), 
 				ftdm_channel_indication2str(ftdmchan->indication),
 				ftdm_channel_state2str(ftdmchan->state));
@@ -2303,14 +2314,14 @@ FT_DECLARE(ftdm_status_t) _ftdm_channel_call_indicate(const char *file, const ch
 	}
 
 	if (ftdm_test_flag(ftdmchan, FTDM_CHANNEL_OUTBOUND)) {
-		ftdm_log_chan(ftdmchan, FTDM_LOG_WARNING, "Cannot indicate %s in outgoing channel in state %s\n",
+		ftdm_log_chan_ex(ftdmchan, file, func, line, FTDM_LOG_LEVEL_WARNING, "Cannot indicate %s in outgoing channel in state %s\n",
 				ftdm_channel_indication2str(indication), ftdm_channel_state2str(ftdmchan->state));
 		status = FTDM_EINVAL;
 		goto done;
 	}
 
 	if (ftdmchan->state == FTDM_CHANNEL_STATE_TERMINATING) {
-		ftdm_log_chan(ftdmchan, FTDM_LOG_DEBUG, "Ignoring indication %s because the call is in %s state\n",
+		ftdm_log_chan_ex(ftdmchan, file, func, line, FTDM_LOG_LEVEL_DEBUG, "Ignoring indication %s because the call is in %s state\n",
 				ftdm_channel_indication2str(indication), ftdm_channel_state2str(ftdmchan->state));
 		status = FTDM_ECANCELED;
 		goto done;
@@ -2347,7 +2358,7 @@ FT_DECLARE(ftdm_status_t) _ftdm_channel_call_indicate(const char *file, const ch
 
 			/* set state unlocks the channel so we need to re-confirm that the channel hasn't gone to hell */
 			if (ftdmchan->state == FTDM_CHANNEL_STATE_TERMINATING) {
-				ftdm_log_chan_msg(ftdmchan, FTDM_LOG_DEBUG, "Ignoring progress media because the call is terminating\n");
+				ftdm_log_chan_ex_msg(ftdmchan, file, func, line, FTDM_LOG_LEVEL_DEBUG, "Ignoring progress media because the call is terminating\n");
 				goto done;
 			}
 		}
@@ -2405,8 +2416,6 @@ static ftdm_status_t _ftdm_channel_call_place_nl(const char *file, const char *f
 	
 	ftdm_assert_return(ftdmchan != NULL, FTDM_FAIL, "null channel");
 	ftdm_assert_return(ftdm_test_flag(ftdmchan, FTDM_CHANNEL_OUTBOUND), FTDM_FAIL, "Call place, but outbound flag not set\n");
-
-	ftdm_set_echocancel_call_begin(ftdmchan);
 
 	if (!ftdmchan->span->outgoing_call) {
 		ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "outgoing_call method not implemented in this span!\n");
@@ -2518,26 +2527,34 @@ done:
 	return status;
 }
 
-FT_DECLARE(ftdm_status_t) ftdm_channel_set_sig_status(ftdm_channel_t *ftdmchan, ftdm_signaling_status_t sigstatus)
+FT_DECLARE(ftdm_status_t) ftdm_channel_set_sig_status(ftdm_channel_t *fchan, ftdm_signaling_status_t sigstatus)
 {
-	ftdm_assert_return(ftdmchan != NULL, FTDM_FAIL, "Null channel\n");
-	ftdm_assert_return(ftdmchan->span != NULL, FTDM_FAIL, "Null span\n");
+	ftdm_status_t res;
+
+	ftdm_assert_return(fchan != NULL, FTDM_FAIL, "Null channel\n");
+	ftdm_assert_return(fchan->span != NULL, FTDM_FAIL, "Null span\n");
+	ftdm_assert_return(fchan->span->set_channel_sig_status != NULL, FTDM_ENOSYS, "Not implemented\n");
+
+	ftdm_channel_lock(fchan);
+
+	if (ftdm_test_flag(fchan, FTDM_CHANNEL_IN_ALARM)) {
+		ftdm_log_chan_msg(fchan, FTDM_LOG_WARNING, "You can not set the signaling status of an alarmed channel\n");
+		res = FTDM_EINVAL;
+		goto done;
+	}
 
 	if (sigstatus == FTDM_SIG_STATE_DOWN) {
-		ftdm_log_chan_msg(ftdmchan, FTDM_LOG_WARNING, "The user is not allowed to set the signaling status to DOWN, valid states are UP or SUSPENDED\n");
-		return FTDM_FAIL;
+		ftdm_log_chan_msg(fchan, FTDM_LOG_WARNING, "You can not set the signaling status to DOWN, valid states are UP or SUSPENDED\n");
+		res = FTDM_EINVAL;
+		goto done;
 	}
 
-	if (ftdmchan->span->set_channel_sig_status) {
-		ftdm_status_t res;
-		ftdm_channel_lock(ftdmchan);
-		res = ftdmchan->span->set_channel_sig_status(ftdmchan, sigstatus);
-		ftdm_channel_unlock(ftdmchan);
-		return res;
-	} else {
-		ftdm_log(FTDM_LOG_ERROR, "set_channel_sig_status method not implemented!\n");
-		return FTDM_FAIL;
-	}
+	res = fchan->span->set_channel_sig_status(fchan, sigstatus);
+done:
+
+	ftdm_channel_unlock(fchan);
+
+	return res;
 }
 
 FT_DECLARE(ftdm_status_t) ftdm_channel_get_sig_status(ftdm_channel_t *ftdmchan, ftdm_signaling_status_t *sigstatus)
@@ -5494,8 +5511,14 @@ FT_DECLARE(ftdm_status_t) ftdm_span_send_signal(ftdm_span_t *span, ftdm_sigmsg_t
 		{
 			if (sigmsg->ev_data.sigstatus.status == FTDM_SIG_STATE_UP) {
 				ftdm_set_flag(sigmsg->channel, FTDM_CHANNEL_SIG_UP);
+				ftdm_clear_flag(sigmsg->channel, FTDM_CHANNEL_SUSPENDED);
 			} else {
 				ftdm_clear_flag(sigmsg->channel, FTDM_CHANNEL_SIG_UP);
+				if (sigmsg->ev_data.sigstatus.status == FTDM_SIG_STATE_SUSPENDED) {
+					ftdm_set_flag(sigmsg->channel, FTDM_CHANNEL_SUSPENDED);
+				} else {
+					ftdm_clear_flag(sigmsg->channel, FTDM_CHANNEL_SUSPENDED);
+				}
 			}
 		}
 		break;
@@ -5523,20 +5546,46 @@ FT_DECLARE(ftdm_status_t) ftdm_span_send_signal(ftdm_span_t *span, ftdm_sigmsg_t
 		}
 		break;
 
+	case FTDM_SIGEVENT_PROGRESS_MEDIA:
+		{
+			/* test signaling module compliance */
+			if (sigmsg->channel->state != FTDM_CHANNEL_STATE_PROGRESS_MEDIA) {
+				ftdm_log_chan(sigmsg->channel, FTDM_LOG_WARNING, "FTDM_SIGEVENT_PROGRESS_MEDIA sent in state %s\n", ftdm_channel_state2str(sigmsg->channel->state));
+			}
+		}
+		break;
+
+	case FTDM_SIGEVENT_UP:
+		{
+			/* test signaling module compliance */
+			if (sigmsg->channel->state != FTDM_CHANNEL_STATE_UP) {
+				ftdm_log_chan(sigmsg->channel, FTDM_LOG_WARNING, "FTDM_SIGEVENT_UP sent in state %s\n", ftdm_channel_state2str(sigmsg->channel->state));
+			}
+		}
+		break;
+
 	case FTDM_SIGEVENT_STOP:
-		if (!ftdm_test_flag(sigmsg->channel, FTDM_CHANNEL_CALL_STARTED)) {
-			/* this happens for FXS devices which blindly send SIGEVENT_STOP, we should fix it there ... */
-			ftdm_log_chan_msg(sigmsg->channel, FTDM_LOG_DEBUG, "Ignoring SIGEVENT_STOP since user never knew about a call in this channel\n");
-			goto done;
-		}
-		if (ftdm_test_flag(sigmsg->channel, FTDM_CHANNEL_USER_HANGUP)) {
-			ftdm_log_chan_msg(sigmsg->channel, FTDM_LOG_DEBUG, "Ignoring SIGEVENT_STOP since user already requested hangup\n");
-			goto done;
-		}
-		if (sigmsg->channel->state == FTDM_CHANNEL_STATE_TERMINATING) {
-			ftdm_log_chan_msg(sigmsg->channel, FTDM_LOG_DEBUG, "Scheduling safety hangup timer\n");
-			/* if the user does not move us to hangup in 2 seconds, we will do it ourselves */
-			ftdm_sched_timer(globals.timingsched, "safety-hangup", FORCE_HANGUP_TIMER, execute_safety_hangup, sigmsg->channel, &sigmsg->channel->hangup_timer);
+		{
+			/* TODO: we could test for compliance here and check the state is FTDM_CHANNEL_STATE_TERMINATING
+			 * but several modules need to be updated first */
+
+			/* if the call was never started, do not send SIGEVENT_STOP
+			   this happens for FXS devices in ftmod_analog which blindly send SIGEVENT_STOP, we should fix it there ... */
+			if (!ftdm_test_flag(sigmsg->channel, FTDM_CHANNEL_CALL_STARTED)) {
+				ftdm_log_chan_msg(sigmsg->channel, FTDM_LOG_DEBUG, "Ignoring SIGEVENT_STOP since user never knew about a call in this channel\n");
+				goto done;
+			}
+
+			if (ftdm_test_flag(sigmsg->channel, FTDM_CHANNEL_USER_HANGUP)) {
+				ftdm_log_chan_msg(sigmsg->channel, FTDM_LOG_DEBUG, "Ignoring SIGEVENT_STOP since user already requested hangup\n");
+				goto done;
+			}
+
+			if (sigmsg->channel->state == FTDM_CHANNEL_STATE_TERMINATING) {
+				ftdm_log_chan_msg(sigmsg->channel, FTDM_LOG_DEBUG, "Scheduling safety hangup timer\n");
+				/* if the user does not move us to hangup in 2 seconds, we will do it ourselves */
+				ftdm_sched_timer(globals.timingsched, "safety-hangup", FORCE_HANGUP_TIMER, execute_safety_hangup, sigmsg->channel, &sigmsg->channel->hangup_timer);
+			}
 		}
 		break;
 

@@ -1705,6 +1705,16 @@ static void *SWITCH_THREAD_FUNC early_thread_run(switch_thread_t *thread, void *
 										 switch_channel_get_state(_peer) == CS_RESET || \
 										 !switch_channel_test_flag(_peer, CF_ORIGINATING)))
 
+static void wait_for_cause(switch_channel_t *channel)
+{
+	int sanity = 5;
+
+	while (--sanity > 0 && peer_eligible(channel) && switch_channel_get_cause(channel) == SWITCH_CAUSE_NONE) {
+		switch_yield(10000);
+	}
+}
+
+
 
 SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *session,
 													 switch_core_session_t **bleg,
@@ -2745,6 +2755,26 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 							}
 						}
 					}
+
+					if (session) {
+						switch_channel_set_variable(originate_status[i].peer_channel, "originating_leg_uuid", switch_core_session_get_uuid(session));
+					}
+
+					if ((vvar = switch_channel_get_variable_dup(originate_status[i].peer_channel, "execute_on_originate", SWITCH_FALSE))) {
+						char *app = switch_core_session_strdup(originate_status[i].peer_session, vvar);
+						char *arg = NULL;
+
+						if (strstr(app, "::")) {
+							switch_core_session_execute_application_async(originate_status[i].peer_session, app, arg);
+						} else {
+							if ((arg = strchr(app, ' '))) {
+								*arg++ = '\0';
+							}
+							
+							switch_core_session_execute_application(originate_status[i].peer_session, app, arg);
+						}
+						
+					}
 				}
 
 				if (table) {
@@ -2763,7 +2793,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 					*cause = SWITCH_CAUSE_SUCCESS;
 					goto outer_for;
 				}
-
+				
 				if (!switch_core_session_running(originate_status[i].peer_session)) {
 					if (originate_status[i].per_channel_delay_start) {
 						switch_channel_set_flag(originate_status[i].peer_channel, CF_BLOCK_STATE);
@@ -3271,7 +3301,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 
 				if (i != oglobals.idx) {
 					holding = NULL;
-
+					
 					if (oglobals.idx == IDX_TIMEOUT || to) {
 						reason = SWITCH_CAUSE_NO_ANSWER;
 					} else {
@@ -3280,6 +3310,11 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 						} else {
 							if (and_argc > 1) {
 								reason = SWITCH_CAUSE_LOSE_RACE;
+							} else if (!switch_channel_ready(originate_status[i].peer_channel)) {
+								wait_for_cause(originate_status[i].peer_channel);
+								if (switch_channel_down(originate_status[i].peer_channel)) {
+									reason = switch_channel_get_cause(originate_status[i].peer_channel);
+								}
 							} else {
 								reason = SWITCH_CAUSE_NO_ANSWER;
 							}
@@ -3385,6 +3420,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 				}
 
 				if (peer_channel) {
+					wait_for_cause(peer_channel);
 					*cause = switch_channel_get_cause(peer_channel);
 				} else {
 					for (i = 0; i < and_argc; i++) {
@@ -3435,6 +3471,19 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 						*cause = switch_channel_get_cause(caller_channel);
 					} else {
 						*cause = SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER;
+						for (i = 0; i < and_argc; i++) {
+							if (!peer_eligible(originate_status[i].peer_channel)) {
+								continue;
+							}
+
+							wait_for_cause(originate_status[i].peer_channel);
+							
+							if (switch_channel_down(originate_status[i].peer_channel)) {
+								*cause = switch_channel_get_cause(originate_status[i].peer_channel);
+								break;
+							}
+							
+						}
 					}
 				}
 
@@ -3529,7 +3578,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 								continue;
 							}
 							pchannel = switch_core_session_get_channel(originate_status[i].peer_session);
-							
+							wait_for_cause(pchannel);
 							if (switch_channel_down(pchannel)) {
 								cause_str = switch_channel_cause2str(switch_channel_get_cause(pchannel));
 								if (switch_stristr(cause_str, fail_on_single_reject_var)) {

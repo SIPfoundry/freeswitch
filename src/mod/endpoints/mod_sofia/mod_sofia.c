@@ -3627,7 +3627,7 @@ SWITCH_STANDARD_API(sofia_function)
 		"--------------------------------------------------------------------------------\n"
 		"sofia help\n"
 		"sofia profile <profile_name> [[start|stop|restart|rescan]|"
-		"flush_inbound_reg [<call_id>] [reboot]|"
+		"flush_inbound_reg [<call_id>|<[user]@domain>] [reboot]|"
 		"[register|unregister] [<gateway name>|all]|"
 		"killgw <gateway name>|"
 		"[stun-auto-disable|stun-enabled] [true|false]]|"
@@ -3695,11 +3695,39 @@ SWITCH_STANDARD_API(sofia_function)
 		int wdon = -1;
 
 		if (argc > 1) {
+			if (!strcasecmp(argv[1], "debug")) {
+
+				if (argc > 2) {
+					if (strstr(argv[2], "presence")) {
+						mod_sofia_globals.debug_presence = 1;
+						stream->write_function(stream, "+OK Debugging presence\n");
+					}
+					
+					if (strstr(argv[2], "sla")) {
+						mod_sofia_globals.debug_sla = 1;
+						stream->write_function(stream, "+OK Debugging sla\n");
+					}
+					
+					if (strstr(argv[2], "none")) {
+						stream->write_function(stream, "+OK Debugging nothing\n");
+						mod_sofia_globals.debug_presence = 0;
+						mod_sofia_globals.debug_sla = 0;
+					}
+				}
+
+				stream->write_function(stream, "+OK Debugging summary: presence: %s sla: %s\n", 
+									   mod_sofia_globals.debug_presence ? "on" : "off",
+									   mod_sofia_globals.debug_sla ? "on" : "off");
+				
+				goto done;
+			}
+			
 			if (!strcasecmp(argv[1], "siptrace")) {
 				if (argc > 2) {
 					ston = switch_true(argv[2]);
 				}
 			}
+
 			if (!strcasecmp(argv[1], "watchdog")) {
 				if (argc > 2) {
 					wdon = switch_true(argv[2]);
@@ -3714,7 +3742,7 @@ SWITCH_STANDARD_API(sofia_function)
 			sofia_glue_global_watchdog(wdon);
 			stream->write_function(stream, "+OK Global watchdog %s", wdon ? "on" : "off");
 		} else {
-			stream->write_function(stream, "-ERR Usage: siptrace <on|off>|watchdog <on|off>");
+			stream->write_function(stream, "-ERR Usage: siptrace <on|off>|watchdog <on|off>|debug <sla|presence|none");
 		}
 		
 		goto done;
@@ -4822,7 +4850,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_sofia_load)
 	sofia_endpoint_interface->state_handler = &sofia_event_handlers;
 
 	management_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_MANAGEMENT_INTERFACE);
-	management_interface->relative_oid = "1";
+	management_interface->relative_oid = "1001";
 	management_interface->management_function = sofia_manage;
 
 	SWITCH_ADD_API(api_interface, "sofia", "Sofia Controls", sofia_function, "<cmd> <args>");
@@ -4837,6 +4865,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_sofia_load)
 
 	switch_console_set_complete("add sofia global siptrace ::[on:off");
 	switch_console_set_complete("add sofia global watchdog ::[on:off");
+
+	switch_console_set_complete("add sofia global debug ::[presence:sla:none");
+
 
 	switch_console_set_complete("add sofia profile");
 	switch_console_set_complete("add sofia profile restart all");

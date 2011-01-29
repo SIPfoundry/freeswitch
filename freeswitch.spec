@@ -959,6 +959,8 @@ fi
 #
 ######################################################################################################################
 %changelog
+* Tue Jan 18 2011 - michal.bielicki@seventhsignal.de
+- Fedora adjustments
 * Fri Oct 15 2010 - michal.bielicki@seventhsignal.de
 - added mod_curl
 * Sat Oct 09 2010 - michal.bielicki@seventhsignal.de
