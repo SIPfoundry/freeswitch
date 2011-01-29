@@ -1,12 +1,10 @@
+freeswitch_VER = 1.0.7
 # format:  ${number of commits past tag}.${refid of HEAD}
-freeswitch_PACKAGE_REVISION = $(shell \
-	cd $(SRC)/$(PROJ); \
-	$(SRC)/config/git-version-gen .version | \
-	sed 's/\([0-9.]\+\)-\([0-9]\+\)-\([0-9a-f]\+\)/\2.\3/g')
+freeswitch_PACKAGE_REVISION = $(shell cd $(SRC)/$(PROJ); ../config/revision-gen $(freeswitch_VER))
 
-freeswitch_SRPM = freeswitch-1.0.7-$(freeswitch_PACKAGE_REVISION).src.rpm
+freeswitch_SRPM = freeswitch-$(freeswitch_VER)-$(freeswitch_PACKAGE_REVISION).src.rpm
 freeswitch_SPEC = $(SRC)/$(PROJ)/freeswitch.spec
-freeswitch_TARBALL = $(BUILDDIR)/$(PROJ)/freeswitch-1.0.7.tar.bz2
+freeswitch_TARBALL = $(BUILDDIR)/$(PROJ)/freeswitch-$(freeswitch_VER).tar.bz2
 freeswitch_SOURCES = $(freeswitch_TARBALL) \
 	celt-0.7.1.tar.gz \
 	flite-1.3.99-latest.tar.gz \
@@ -29,4 +27,4 @@ freeswitch.autoreconf freeswitch.configure:;
 freeswitch.dist :
 	test -d $(dir $(freeswitch_TARBALL)) || mkdir -p $(dir $(freeswitch_TARBALL))
 	cd $(SRC)/$(PROJ); \
-	  git archive --format tar --prefix freeswitch-1.0.7/ HEAD | bzip2 > $(freeswitch_TARBALL)
+	  git archive --format tar --prefix freeswitch-$(freeswitch_VER)/ HEAD | bzip2 > $(freeswitch_TARBALL)
