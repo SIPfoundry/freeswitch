@@ -110,6 +110,7 @@ BuildRequires: zlib-devel
 BuildRequires: e2fsprogs-devel
 BuildRequires: libtheora-devel
 BuildRequires: erlang
+BuildRequires: java-devel
 Requires: alsa-lib
 Requires: libogg
 Requires: libvorbis
@@ -248,6 +249,14 @@ Requires:       %{name} = %{version}-%{release}
 Requires:		python
 
 %description    python
+
+%package        java
+Summary:        Java support for the FreeSWITCH open source telephony platform
+Group:          System/Libraries
+Requires:       %{name} = %{version}-%{release}
+Requires:	java
+
+%description    java
 
 
 %package lang-en
@@ -904,6 +913,11 @@ fi
 %attr(0644, root, bin) /usr/lib/python*/site-packages/freeswitch.py*
 %dir %attr(0750, freeswitch, daemon) %{prefix}/conf/autoload_configs
 %config(noreplace) %attr(0640, freeswitch, daemon) %{prefix}/conf/autoload_configs/python.conf.xml
+
+%files java
+%defattr(-,freeswitch,daemon)
+%{prefix}/mod/mod_java.so*
+%{prefix}/scripts/freeswitch.jar
 
 ######################################################################################################################
 #

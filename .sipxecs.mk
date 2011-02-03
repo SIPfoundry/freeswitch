@@ -17,8 +17,8 @@ freeswitch_SOURCES = $(freeswitch_TARBALL) \
 	communicator_semi_6000_20080321.tar.gz \
 	libmemcached-0.32.tar.gz
 
-freeswitch_SRPM_DEFS = --define "buildno $(freeswitch_REV)"
-freeswitch_RPM_DEFS = --define="buildno $(freeswitch_REV)"
+freeswitch_SRPM_DEFS = --define "buildno $(freeswitch_PACKAGE_REVISION)"
+freeswitch_RPM_DEFS = --define="buildno $(freeswitch_PACKAGE_REVISION)"
 
 # we could, but we don't these targets. FS doesn't support running ./configure from anywhere but source root.
 freeswitch.autoreconf freeswitch.configure:;
