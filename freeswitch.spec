@@ -400,7 +400,7 @@ FORMATS_MODULES="formats/mod_file_string formats/mod_local_stream formats/mod_na
 #						Embedded Languages
 #
 ######################################################################################################################
-LANGUAGES_MODULES="languages/mod_lua languages/mod_perl languages/mod_python languages/mod_spidermonkey"
+LANGUAGES_MODULES="languages/mod_lua languages/mod_perl languages/mod_python languages/mod_spidermonkey languages/mod_java"
 ######################################################################################################################
 #
 #						Logging Modules
