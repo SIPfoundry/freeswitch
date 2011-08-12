@@ -51,7 +51,6 @@ static struct {
 	char *address;
 	char *bindings;
 	uint32_t key_count;
-	char hostname[80];
 	switch_port_t port;
 	switch_sockaddr_t *addr;
 	switch_socket_t *udp_socket;
@@ -62,6 +61,7 @@ static struct {
 	char *psk;
 	switch_mutex_t *mutex;
 	switch_hash_t *peer_hash;
+	int loopback;
 } globals;
 
 struct peer_status {
@@ -89,6 +89,7 @@ static switch_status_t load_config(void)
 
 	globals.ttl = 1;
 	globals.key_count = 0;
+	globals.loopback = 0;
 
 	if (!(xml = switch_xml_open_cfg(cf, &cfg, NULL))) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Open of %s failed\n", cf);
@@ -120,6 +121,8 @@ static switch_status_t load_config(void)
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Invalid ttl '%s' specified, using default of 1\n", val);
 				}
+			} else if (!strcasecmp(var, "loopback")) {
+				globals.loopback = switch_true(val);
 			}
 
 		}
@@ -282,7 +285,7 @@ static void event_handler(switch_event_t *event)
 		case SWITCH_EVENT_LOG:
 			return;
 		default:
-			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Multicast-Sender", globals.hostname);
+			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Multicast-Sender", switch_core_get_switchname());
 			if (switch_event_serialize(event, &packet, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
 				size_t len;
 				char *buf;
@@ -377,7 +380,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_event_multicast_load)
 	switch_core_hash_init(&globals.event_hash, module_pool);
 	switch_core_hash_init(&globals.peer_hash, module_pool);
 
-	gethostname(globals.hostname, sizeof(globals.hostname));
 	globals.key_count = 0;
 
 	if (load_config() != SWITCH_STATUS_SUCCESS) {
@@ -410,8 +412,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_event_multicast_load)
 		switch_goto_status(SWITCH_STATUS_TERM, fail);
 	}
 
-	if (switch_mcast_loopback(globals.udp_socket, 0) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to disable loopback\n");
+	if (switch_mcast_loopback(globals.udp_socket, globals.loopback) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to set loopback to '%d'\n", globals.loopback);
 		switch_goto_status(SWITCH_STATUS_TERM, fail);
 	}
 

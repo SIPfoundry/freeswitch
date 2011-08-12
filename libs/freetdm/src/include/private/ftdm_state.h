@@ -67,6 +67,7 @@ typedef enum {
 	FTDM_CHANNEL_STATE_PROGRESS,
 	FTDM_CHANNEL_STATE_PROGRESS_MEDIA,
 	FTDM_CHANNEL_STATE_UP,
+	FTDM_CHANNEL_STATE_TRANSFER,
 	FTDM_CHANNEL_STATE_IDLE,
 	FTDM_CHANNEL_STATE_TERMINATING,
 	FTDM_CHANNEL_STATE_CANCEL,
@@ -78,7 +79,7 @@ typedef enum {
 } ftdm_channel_state_t;
 #define CHANNEL_STATE_STRINGS "DOWN", "HOLD", "SUSPENDED", "DIALTONE", "COLLECT", \
 		"RING", "RINGING", "BUSY", "ATTN", "GENRING", "DIALING", "GET_CALLERID", "CALLWAITING", \
-		"RESTART", "PROCEED", "PROGRESS", "PROGRESS_MEDIA", "UP", "IDLE", "TERMINATING", "CANCEL", \
+		"RESTART", "PROCEED", "PROGRESS", "PROGRESS_MEDIA", "UP", "TRANSFER", "IDLE", "TERMINATING", "CANCEL", \
 		"HANGUP", "HANGUP_COMPLETE", "IN_LOOP", "RESET", "INVALID"
 FTDM_STR2ENUM_P(ftdm_str2ftdm_channel_state, ftdm_channel_state2str, ftdm_channel_state_t)
 
@@ -188,7 +189,7 @@ FT_DECLARE(ftdm_status_t) ftdm_channel_cancel_state(const char *file, const char
  * \note If this function is called with the wait parameter set to a non-zero value, the recursivity
  *       of the channel lock must be == 1 because the channel will be unlocked/locked when waiting */
 FT_DECLARE(ftdm_status_t) ftdm_channel_set_state(const char *file, const char *func, int line,
-		ftdm_channel_t *ftdmchan, ftdm_channel_state_t state, int wait);
+		ftdm_channel_t *ftdmchan, ftdm_channel_state_t state, int wait, ftdm_usrmsg_t *usrmsg);
 
 /*!\brief Set the state of a channel immediately and implicitly complete the previous state if needed 
  * \note FTDM_SIGEVENT_INDICATION_COMPLETED will be sent if the state change 
@@ -207,7 +208,7 @@ FT_DECLARE(ftdm_status_t) _ftdm_set_state(const char *file, const char *func, in
 #define ftdm_set_state_locked(obj, s) \
 	do { \
 		ftdm_channel_lock(obj); \
-		ftdm_channel_set_state(__FILE__, __FUNCTION__, __LINE__, obj, s, 0);									\
+		ftdm_channel_set_state(__FILE__, __FUNCTION__, __LINE__, obj, s, 0, NULL);									\
 		ftdm_channel_unlock(obj); \
 	} while(0);
 

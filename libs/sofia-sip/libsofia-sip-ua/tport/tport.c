@@ -1595,7 +1595,7 @@ int tport_bind_server(tport_master_t *mr,
 {
   char hostname[TPORT_HOSTPORTSIZE];
   char const *canon = NULL, *host, *service;
-  int error = 0, not_supported, family = 0;
+  int error = 0, family = 0;
   tport_primary_t *pri = NULL, **tbf;
   su_addrinfo_t *ai, *res = NULL;
   unsigned port, port0, port1, old;
@@ -1690,8 +1690,6 @@ int tport_bind_server(tport_master_t *mr,
 	}
 	break;
       }
-
-      not_supported = 0;
 
       if (port0 == 0 && port == 0) {
 	port = port1 = ntohs(su->su_port);
@@ -3556,6 +3554,10 @@ ssize_t tport_vsend(tport_t *self,
 
   if (n > 0 && self->tp_master->mr_dump_file)
     tport_dump_iovec(self, msg, n, iov, iovused, "sent", "to");
+    
+  if (n > 0 && self->tp_master->mr_capt_sock)
+      tport_capt_msg(self, msg, n, iov, iovused, "sent");
+              
 
   if (tport_log->log_level >= 7) {
     size_t i, m = 0;

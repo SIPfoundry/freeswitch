@@ -203,16 +203,12 @@ SWITCH_DECLARE(void) switch_core_session_hupall_matching_var(const char *var_nam
 	for (hi = switch_hash_first(NULL, session_manager.session_table); hi; hi = switch_hash_next(hi)) {
 		switch_hash_this(hi, NULL, NULL, &val);
 		if (val) {
-			const char *this_val;
 			session = (switch_core_session_t *) val;
 			if (switch_core_session_read_lock(session) == SWITCH_STATUS_SUCCESS) {
-				if (switch_channel_up(session->channel) &&
-					(this_val = switch_channel_get_variable(session->channel, var_name)) && (!strcmp(this_val, var_val))) {
-					np = switch_core_alloc(pool, sizeof(*np));
-					np->str = switch_core_strdup(pool, session->uuid_str);
-					np->next = head;
-					head = np;
-				}
+				np = switch_core_alloc(pool, sizeof(*np));
+				np->str = switch_core_strdup(pool, session->uuid_str);
+				np->next = head;
+				head = np;
 				switch_core_session_rwunlock(session);
 			}
 		}
@@ -221,7 +217,11 @@ SWITCH_DECLARE(void) switch_core_session_hupall_matching_var(const char *var_nam
 
 	for(np = head; np; np = np->next) {
 		if ((session = switch_core_session_locate(np->str))) {
-			switch_channel_hangup(session->channel, cause);
+			const char *this_val;
+			if (switch_channel_up(session->channel) &&
+				(this_val = switch_channel_get_variable(session->channel, var_name)) && (!strcmp(this_val, var_val))) {			
+				switch_channel_hangup(session->channel, cause);
+			}
 			switch_core_session_rwunlock(session);
 		}
 	}
@@ -481,14 +481,12 @@ SWITCH_DECLARE(switch_call_cause_t) switch_core_session_outgoing_channel(switch_
 		UNPROTECT_INTERFACE(endpoint_interface);
 		return SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER;
 	} else {
-		switch_caller_profile_t *profile = NULL, *peer_profile = NULL, *cloned_profile = NULL;
+		switch_caller_profile_t *profile = NULL, *cloned_profile = NULL;
 		switch_event_t *event;
 		switch_channel_t *peer_channel = switch_core_session_get_channel(*new_session);
 		const char *use_uuid;
 
 		switch_assert(peer_channel);
-
-		peer_profile = switch_channel_get_caller_profile(peer_channel);
 
 		if ((use_uuid = switch_event_get_header(var_event, "origination_uuid"))) {
 			use_uuid = switch_core_session_strdup(*new_session, use_uuid);
@@ -505,7 +503,7 @@ SWITCH_DECLARE(switch_call_cause_t) switch_core_session_outgoing_channel(switch_
 		if (channel) {
 			const char *val;
 			switch_codec_t *vid_read_codec = NULL, *read_codec = switch_core_session_get_read_codec(session);
-			const char *max_forwards = switch_core_session_sprintf(session, "%d", forwardval);
+			const char *ep, *max_forwards = switch_core_session_sprintf(session, "%d", forwardval);
 
 			switch_channel_set_variable(peer_channel, SWITCH_MAX_FORWARDS_VARIABLE, max_forwards);
 
@@ -525,11 +523,13 @@ SWITCH_DECLARE(switch_call_cause_t) switch_core_session_outgoing_channel(switch_
 
 				switch_snprintf(tmp, sizeof(tmp), "%s%s", rc, vrc);
 				switch_channel_set_variable(peer_channel, SWITCH_ORIGINATOR_CODEC_VARIABLE, tmp);
+			} else if ((ep = switch_channel_get_variable(channel, "ep_codec_string"))) {
+				printf("SET [%s] [%s]\n", switch_channel_get_name(peer_channel), ep);
+				switch_channel_set_variable(peer_channel, SWITCH_ORIGINATOR_CODEC_VARIABLE, ep);
 			}
 
 			switch_channel_set_variable(peer_channel, SWITCH_ORIGINATOR_VARIABLE, switch_core_session_get_uuid(session));
 			switch_channel_set_variable(peer_channel, SWITCH_SIGNAL_BOND_VARIABLE, switch_core_session_get_uuid(session));
-			switch_channel_set_variable(channel, SWITCH_SIGNAL_BOND_VARIABLE, switch_core_session_get_uuid(*new_session));
 
 			if ((val = switch_channel_get_variable(channel, SWITCH_PROCESS_CDR_VARIABLE))) {
 				switch_channel_set_variable(peer_channel, SWITCH_PROCESS_CDR_VARIABLE, val);
@@ -618,6 +618,10 @@ static const char *message_names[] = {
 	"APPLICATION_EXEC_COMPLETE",
 	"PHONE_EVENT",
 	"T38_DESCRIPTION"
+	"UDPTL_MODE",
+	"CLEAR_PROGRESS",
+	"JITTER_BUFFER",
+	"RECOVERY_REFRESH",
 	"INVALID"
 };
 
@@ -646,8 +650,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_perform_receive_message(swit
 		message->_line = line;
 	}
 
-	if (message->message_id > SWITCH_MESSAGE_INVALID) {
-		message->message_id = SWITCH_MESSAGE_INVALID;
+	if (message->message_id > SWITCH_MESSAGE_INVALID-1) {
+		message->message_id = SWITCH_MESSAGE_INVALID-1;
 	}
 
 	switch_log_printf(SWITCH_CHANNEL_ID_LOG, message->_file, message->_func, message->_line,
@@ -667,10 +671,10 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_perform_receive_message(swit
 		goto end;
 	}
 
-	if (switch_channel_down(session->channel)) {
-	switch_log_printf(SWITCH_CHANNEL_ID_LOG, message->_file, message->_func, message->_line,
-					  switch_core_session_get_uuid(session), SWITCH_LOG_DEBUG, "%s skip receive message [%s] (channel is hungup already)\n",
-					  switch_channel_get_name(session->channel), message_names[message->message_id]);
+	if (switch_channel_down(session->channel) && message->message_id != SWITCH_MESSAGE_INDICATE_SIGNAL_DATA) {
+		switch_log_printf(SWITCH_CHANNEL_ID_LOG, message->_file, message->_func, message->_line,
+						  switch_core_session_get_uuid(session), SWITCH_LOG_DEBUG, "%s skip receive message [%s] (channel is hungup already)\n",
+						  switch_channel_get_name(session->channel), message_names[message->message_id]);
 	
 	} else if (session->endpoint_interface->io_routines->receive_message) {
 		status = session->endpoint_interface->io_routines->receive_message(session, message);
@@ -807,7 +811,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_dequeue_message(switch_core_
 
 	switch_assert(session != NULL);
 
-	if (session->message_queue) {
+	if (session->message_queue && switch_queue_size(session->message_queue)) {
 		if ((status = (switch_status_t) switch_queue_trypop(session->message_queue, &pop)) == SWITCH_STATUS_SUCCESS) {
 			*message = (switch_core_session_message_t *) pop;
 			if ((*message)->delivery_time && (*message)->delivery_time > switch_epoch_time_now(NULL)) {
@@ -839,6 +843,42 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_flush_message(switch_core_se
 	return SWITCH_STATUS_SUCCESS;
 }
 
+SWITCH_DECLARE(switch_status_t) switch_core_session_queue_signal_data(switch_core_session_t *session, void *signal_data)
+{
+	switch_status_t status = SWITCH_STATUS_FALSE;
+
+	switch_assert(session != NULL);
+
+	if (session->signal_data_queue) {
+		if (switch_queue_trypush(session->signal_data_queue, signal_data) == SWITCH_STATUS_SUCCESS) {
+			status = SWITCH_STATUS_SUCCESS;
+		}
+
+		switch_core_session_kill_channel(session, SWITCH_SIG_BREAK);
+
+		if (switch_channel_test_flag(session->channel, CF_PROXY_MODE) || switch_channel_test_flag(session->channel, CF_THREAD_SLEEPING)) {
+			switch_core_session_wake_session_thread(session);
+		}
+	}
+	
+	return status;
+}
+
+SWITCH_DECLARE(switch_status_t) switch_core_session_dequeue_signal_data(switch_core_session_t *session, void **signal_data)
+{
+	switch_status_t status = SWITCH_STATUS_FALSE;
+	void *pop;
+
+	switch_assert(session != NULL);
+
+	if (session->signal_data_queue && switch_queue_size(session->signal_data_queue)) {
+		if ((status = (switch_status_t) switch_queue_trypop(session->signal_data_queue, &pop)) == SWITCH_STATUS_SUCCESS) {
+			*signal_data = pop;
+		}
+	}
+
+	return status;
+}
 
 SWITCH_DECLARE(switch_status_t) switch_core_session_receive_event(switch_core_session_t *session, switch_event_t **event)
 {
@@ -1386,6 +1426,9 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_set_uuid(switch_core_session
 		profile->uuid = switch_core_strdup(profile->pool, use_uuid);
 	}
 
+	switch_channel_set_variable(session->channel, "uuid", use_uuid);
+	switch_channel_set_variable(session->channel, "call_uuid", use_uuid);
+
 	switch_event_create(&event, SWITCH_EVENT_CHANNEL_UUID);
 	switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Old-Unique-ID", session->uuid_str);
 	switch_core_hash_delete(session_manager.session_table, session->uuid_str);
@@ -1454,13 +1497,12 @@ SWITCH_DECLARE(switch_core_session_t *) switch_core_session_request_xml(switch_e
 	switch_channel_t *channel;
 	switch_xml_t tag, tag2, tag3, vars, callflow;
 	switch_call_direction_t direction = SWITCH_CALL_DIRECTION_OUTBOUND;
-	char *bridgeto, *flag_str = NULL, *cap_str = NULL, *direction_s = NULL, *uuid = NULL;
+	char *flag_str = NULL, *cap_str = NULL, *direction_s = NULL, *uuid = NULL;
 	uint32_t flags[CF_FLAG_MAX] = { 0 };
 	uint32_t caps[CC_FLAG_MAX] = { 0 };
 	int i;
 
 	vars = switch_xml_child(xml, "variables");
-	bridgeto = xml_find_var(vars, SWITCH_SIGNAL_BOND_VARIABLE);
 	uuid = xml_find_var(vars, "uuid");
 
 	if ((tag = switch_xml_child(xml, "channel_data"))) {
@@ -1689,6 +1731,7 @@ SWITCH_DECLARE(switch_core_session_t *) switch_core_session_request_uuid(switch_
 	}
 
 	switch_channel_set_variable(session->channel, "uuid", session->uuid_str);
+	switch_channel_set_variable(session->channel, "call_uuid", session->uuid_str);
 
 	session->endpoint_interface = endpoint_interface;
 	session->raw_write_frame.data = session->raw_write_buf;
@@ -1712,6 +1755,7 @@ SWITCH_DECLARE(switch_core_session_t *) switch_core_session_request_uuid(switch_
 	switch_thread_rwlock_create(&session->rwlock, session->pool);
 	switch_thread_rwlock_create(&session->io_rwlock, session->pool);
 	switch_queue_create(&session->message_queue, SWITCH_MESSAGE_QUEUE_LEN, session->pool);
+	switch_queue_create(&session->signal_data_queue, SWITCH_MESSAGE_QUEUE_LEN, session->pool);
 	switch_queue_create(&session->event_queue, SWITCH_EVENT_QUEUE_LEN, session->pool);
 	switch_queue_create(&session->private_event_queue, SWITCH_EVENT_QUEUE_LEN, session->pool);
 	switch_queue_create(&session->private_event_queue_pri, SWITCH_EVENT_QUEUE_LEN, session->pool);
@@ -1947,7 +1991,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_execute_application_get_flag
 
 			do {
 				sanity--;
-				ready = switch_channel_media_ready(session->channel);
+				ready = switch_channel_media_up(session->channel);
 				switch_cond_next();
 			} while(!ready && sanity);
 
@@ -1978,6 +2022,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_exec(switch_core_session_t *
 	char *expanded = NULL;
 	const char *app;
 	switch_core_session_message_t msg = { 0 };
+	char delim = ',';
+	int scope = 0;
 
 	switch_assert(application_interface);
 
@@ -1987,6 +2033,31 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_exec(switch_core_session_t *
 		expanded = switch_channel_expand_variables(session->channel, arg);
 	}
 
+	if (expanded && *expanded == '%' && (*(expanded+1) == '[' || *(expanded+2) == '[')) {
+		char *p, *dup;
+		switch_event_t *ovars = NULL;
+		
+		p = expanded + 1;
+
+		if (*p != '[') {
+			delim = *p;
+			p++;
+		}
+
+		dup = strdup(p);
+		
+		if (expanded != arg) {
+			switch_safe_free(expanded);
+		}
+
+		switch_event_create_brackets(dup, '[', ']', delim, &ovars, &expanded, SWITCH_TRUE);
+		free(dup);
+
+		switch_channel_set_scope_variables(session->channel, &ovars);
+		scope = 1;
+	}
+
+	
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG_CLEAN(session), SWITCH_LOG_DEBUG, "EXECUTE %s %s(%s)\n",
 					  switch_channel_get_name(session->channel), app, switch_str_nil(expanded));
 
@@ -2012,6 +2083,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_exec(switch_core_session_t *
 		if (expanded) {
 			log->arg = switch_core_session_strdup(session, expanded);
 		}
+
+		log->stamp = switch_time_now();
 
 		for (lp = session->app_log; lp && lp->next; lp = lp->next);
 
@@ -2061,6 +2134,10 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_exec(switch_core_session_t *
 
 	if (expanded != arg) {
 		switch_safe_free(expanded);
+	}
+
+	if (scope) {
+		switch_channel_set_scope_variables(session->channel, NULL);
 	}
 
 	return SWITCH_STATUS_SUCCESS;

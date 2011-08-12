@@ -43,10 +43,56 @@ SNGISDN_STR2ENUM(ftdm_str2ftdm_sngisdn_progind_descr, ftdm_sngisdn_progind_descr
 SNGISDN_ENUM_NAMES(SNGISDN_PROGIND_LOC_NAMES, SNGISDN_PROGIND_LOC_STRINGS)
 SNGISDN_STR2ENUM(ftdm_str2ftdm_sngisdn_progind_loc, ftdm_sngisdn_progind_loc2str, ftdm_sngisdn_progind_loc_t, SNGISDN_PROGIND_LOC_NAMES, SNGISDN_PROGIND_LOC_INVALID)
 
-ftdm_status_t sngisdn_check_free_ids(void);
+static uint8_t get_trillium_val(ftdm2trillium_t *vals, uint8_t ftdm_val, uint8_t default_val);
+static uint8_t get_ftdm_val(ftdm2trillium_t *vals, uint8_t trillium_val, uint8_t default_val);
+ftdm_status_t get_calling_name_from_usr_usr(ftdm_channel_t *ftdmchan, UsrUsr *usrUsr);
+ftdm_status_t get_calling_name_from_display(ftdm_channel_t *ftdmchan, Display *display);
+ftdm_status_t get_calling_name_from_ntDisplay(ftdm_channel_t *ftdmchan, NtDisplay *display);
 
 extern ftdm_sngisdn_data_t	g_sngisdn_data;
-void get_memory_info(void);
+
+ftdm2trillium_t npi_codes[] = {
+	{FTDM_NPI_UNKNOWN,	IN_NP_UNK},
+	{FTDM_NPI_ISDN,		IN_NP_ISDN},
+	{FTDM_NPI_DATA, 	IN_NP_DATA},
+	{FTDM_NPI_TELEX,	IN_NP_TELEX},
+	{FTDM_NPI_NATIONAL, IN_NP_NATIONAL},
+	{FTDM_NPI_PRIVATE,	IN_NP_PRIVATE},
+	{FTDM_NPI_RESERVED, IN_NP_EXT},
+};
+
+ftdm2trillium_t ton_codes[] = {
+	{FTDM_TON_UNKNOWN,				IN_TON_UNK},
+	{FTDM_TON_INTERNATIONAL,		IN_TON_INT},
+	{FTDM_TON_NATIONAL,				IN_TON_NAT},
+	{FTDM_TON_NETWORK_SPECIFIC, 	IN_TON_NETSPEC},
+	{FTDM_TON_SUBSCRIBER_NUMBER,	IN_TON_SUB},
+	{FTDM_TON_ABBREVIATED_NUMBER,	IN_TON_ABB},
+	{FTDM_TON_RESERVED,				IN_TON_EXT},
+};
+
+static uint8_t get_trillium_val(ftdm2trillium_t *vals, uint8_t ftdm_val, uint8_t default_val)
+{
+	ftdm2trillium_t *val = vals;
+	while(val++) {
+		if (val->ftdm_val == ftdm_val) {
+			return val->trillium_val;
+		}
+	}
+	return default_val;
+}
+
+static uint8_t get_ftdm_val(ftdm2trillium_t *vals, uint8_t trillium_val, uint8_t default_val)
+{
+	ftdm2trillium_t *val = vals;
+	while(val++) {
+		if (val->trillium_val == trillium_val) {
+			return val->ftdm_val;
+		}
+	}
+	return default_val;
+}
+
 
 void clear_call_data(sngisdn_chan_data_t *sngisdn_info)
 {
@@ -56,12 +102,14 @@ void clear_call_data(sngisdn_chan_data_t *sngisdn_info)
 	ftdm_mutex_lock(g_sngisdn_data.ccs[cc_id].mutex);
 	g_sngisdn_data.ccs[cc_id].active_spInstIds[sngisdn_info->spInstId]=NULL;
 	g_sngisdn_data.ccs[cc_id].active_suInstIds[sngisdn_info->suInstId]=NULL;
-	ftdm_mutex_unlock(g_sngisdn_data.ccs[cc_id].mutex);
-	
+		
 	sngisdn_info->suInstId = 0;
 	sngisdn_info->spInstId = 0;
 	sngisdn_info->globalFlg = 0;
 	sngisdn_info->flags = 0;
+	sngisdn_info->transfer_data.type = SNGISDN_TRANSFER_NONE;
+
+	ftdm_mutex_unlock(g_sngisdn_data.ccs[cc_id].mutex);
 	return;
 }
 
@@ -225,26 +273,26 @@ ftdm_status_t get_calling_num2(ftdm_channel_t *ftdmchan, CgPtyNmb *cgPtyNmb)
 	}
 
 	if (cgPtyNmb->screenInd.pres == PRSNT_NODEF) {
-		ftdm_call_add_var(caller_data, "isdn.cg_pty2.screen_ind", ftdm_screening2str(cgPtyNmb->screenInd.val));
+		sngisdn_add_var((sngisdn_chan_data_t*)ftdmchan->call_data, "isdn.cg_pty2.screen_ind", ftdm_screening2str(cgPtyNmb->screenInd.val));
 	}
 
 	if (cgPtyNmb->presInd0.pres == PRSNT_NODEF) {
-		ftdm_call_add_var(caller_data, "isdn.cg_pty2.presentation_ind", ftdm_presentation2str(cgPtyNmb->presInd0.val));
+		sngisdn_add_var((sngisdn_chan_data_t*)ftdmchan->call_data, "isdn.cg_pty2.presentation_ind", ftdm_presentation2str(cgPtyNmb->presInd0.val));
 	}
 
 	if (cgPtyNmb->nmbPlanId.pres == PRSNT_NODEF) {
-		ftdm_call_add_var(caller_data, "isdn.cg_pty2.npi", ftdm_npi2str(cgPtyNmb->nmbPlanId.val));
+		sngisdn_add_var((sngisdn_chan_data_t*)ftdmchan->call_data, "isdn.cg_pty2.npi", ftdm_npi2str(cgPtyNmb->nmbPlanId.val));
 	}
 		
 	if (cgPtyNmb->typeNmb1.pres == PRSNT_NODEF) {
-		ftdm_call_add_var(caller_data, "isdn.cg_pty2.ton", ftdm_ton2str(cgPtyNmb->typeNmb1.val));
+		sngisdn_add_var((sngisdn_chan_data_t*)ftdmchan->call_data, "isdn.cg_pty2.ton", ftdm_ton2str(cgPtyNmb->typeNmb1.val));
 	}
 	
 	if (cgPtyNmb->nmbDigits.pres == PRSNT_NODEF) {
 		char digits_string [32];
 		memcpy(digits_string, (const char*)cgPtyNmb->nmbDigits.val, cgPtyNmb->nmbDigits.len);
 		digits_string[cgPtyNmb->nmbDigits.len] = '\0';
-		ftdm_call_add_var(caller_data, "isdn.cg_pty2.digits", digits_string);
+		sngisdn_add_var((sngisdn_chan_data_t*)ftdmchan->call_data, "isdn.cg_pty2.digits", digits_string);
 	}
 	memcpy(&caller_data->ani, &caller_data->cid_num, sizeof(caller_data->ani));
 	return FTDM_SUCCESS;
@@ -253,16 +301,17 @@ ftdm_status_t get_calling_num2(ftdm_channel_t *ftdmchan, CgPtyNmb *cgPtyNmb)
 ftdm_status_t get_called_num(ftdm_channel_t *ftdmchan, CdPtyNmb *cdPtyNmb)
 {
 	ftdm_caller_data_t *caller_data = &ftdmchan->caller_data;
+	
 	if (cdPtyNmb->eh.pres != PRSNT_NODEF) {
 		return FTDM_FAIL;
 	}
 
 	if (cdPtyNmb->nmbPlanId.pres == PRSNT_NODEF) {
-		caller_data->dnis.plan = cdPtyNmb->nmbPlanId.val;
+		caller_data->dnis.plan = get_ftdm_val(npi_codes, cdPtyNmb->nmbPlanId.val, IN_NP_UNK);
 	}
 
 	if (cdPtyNmb->typeNmb0.pres == PRSNT_NODEF) {
-		caller_data->dnis.type = cdPtyNmb->typeNmb0.val;
+		caller_data->dnis.type = get_ftdm_val(ton_codes, cdPtyNmb->typeNmb0.val, IN_TON_UNK);
 	}
 	
 	if (cdPtyNmb->nmbDigits.pres == PRSNT_NODEF) {
@@ -282,11 +331,11 @@ ftdm_status_t get_redir_num(ftdm_channel_t *ftdmchan, RedirNmb *redirNmb)
 	}
 
 	if (redirNmb->nmbPlanId.pres == PRSNT_NODEF) {
-		caller_data->rdnis.plan = redirNmb->nmbPlanId.val;
+		caller_data->rdnis.plan = get_ftdm_val(npi_codes, redirNmb->nmbPlanId.val, IN_NP_UNK);
 	}
 
 	if (redirNmb->typeNmb.pres == PRSNT_NODEF) {
-		caller_data->rdnis.type = redirNmb->typeNmb.val;
+		caller_data->rdnis.type = get_ftdm_val(ton_codes, redirNmb->typeNmb.val, IN_TON_UNK);
 	}
 	
 	if (redirNmb->nmbDigits.pres == PRSNT_NODEF) {
@@ -296,6 +345,20 @@ ftdm_status_t get_redir_num(ftdm_channel_t *ftdmchan, RedirNmb *redirNmb)
 }
 
 ftdm_status_t get_calling_name_from_display(ftdm_channel_t *ftdmchan, Display *display)
+{
+	ftdm_caller_data_t *caller_data = &ftdmchan->caller_data;
+	if (display->eh.pres != PRSNT_NODEF) {
+		return FTDM_FAIL;
+	}
+	if (display->dispInfo.pres != PRSNT_NODEF) {
+		return FTDM_FAIL;
+	}
+	
+	ftdm_copy_string(caller_data->cid_name, (const char*)display->dispInfo.val, display->dispInfo.len+1);
+	return FTDM_SUCCESS;
+}
+
+ftdm_status_t get_calling_name_from_ntDisplay(ftdm_channel_t *ftdmchan, NtDisplay *display)
 {
 	ftdm_caller_data_t *caller_data = &ftdmchan->caller_data;
 	if (display->eh.pres != PRSNT_NODEF) {
@@ -328,6 +391,24 @@ ftdm_status_t get_calling_name_from_usr_usr(ftdm_channel_t *ftdmchan, UsrUsr *us
 	return FTDM_SUCCESS;
 }
 
+ftdm_status_t get_calling_name(ftdm_channel_t *ftdmchan, ConEvnt *conEvnt)
+{
+	ftdm_status_t status = FTDM_FAIL;
+	sngisdn_span_data_t *signal_data = (sngisdn_span_data_t*) ftdmchan->span->signal_data;
+	
+	if (signal_data->switchtype == SNGISDN_SWITCH_DMS100) {
+		status = get_calling_name_from_ntDisplay(ftdmchan, &conEvnt->ntDisplay[0]);
+	} else {
+		status = get_calling_name_from_display(ftdmchan, &conEvnt->display);
+
+	}
+	if (status != FTDM_SUCCESS) {
+		status = get_calling_name_from_usr_usr(ftdmchan, &conEvnt->usrUsr);
+	}
+	return status;
+}
+
+
 ftdm_status_t get_calling_subaddr(ftdm_channel_t *ftdmchan, CgPtySad *cgPtySad)
 {
 	char subaddress[100];
@@ -343,7 +424,7 @@ ftdm_status_t get_calling_subaddr(ftdm_channel_t *ftdmchan, CgPtySad *cgPtySad)
 		
 	memcpy(subaddress, (char*)cgPtySad->sadInfo.val, cgPtySad->sadInfo.len);
 	subaddress[cgPtySad->sadInfo.len] = '\0';
-	ftdm_call_add_var(&ftdmchan->caller_data, "isdn.calling_subaddr", subaddress);
+	sngisdn_add_var((sngisdn_chan_data_t*)ftdmchan->call_data, "isdn.calling_subaddr", subaddress);
 	return FTDM_SUCCESS;
 }
 
@@ -358,21 +439,19 @@ ftdm_status_t get_facility_ie(ftdm_channel_t *ftdmchan, FacilityStr *facilityStr
 
 ftdm_status_t get_facility_ie_str(ftdm_channel_t *ftdmchan, uint8_t *data, uint8_t data_len)
 {
-	ftdm_caller_data_t *caller_data = &ftdmchan->caller_data;
 	sngisdn_span_data_t *signal_data = (sngisdn_span_data_t*) ftdmchan->span->signal_data;
 	
 	if (signal_data->facility_ie_decode == SNGISDN_OPT_FALSE) {
-		/* size of facilityStr->facilityStr.len is a uint8_t so no need to check
-		for overflow here as facilityStr->facilityStr.len will always be smaller
-		than sizeof(caller_data->raw_data) */
+		/* Max size of Facility IE is 255 */
+		uint8_t my_data [255];
 		
-		memset(caller_data->raw_data, 0, sizeof(caller_data->raw_data));
 		/* Always include Facility IE identifier + len so this can be used as a sanity check by the user */
-		caller_data->raw_data[0] = SNGISDN_Q931_FACILITY_IE_ID;
-		caller_data->raw_data[1] = data_len;
-	
-		memcpy(&caller_data->raw_data[2], data, data_len);
-		caller_data->raw_data_len = data_len+2;
+		my_data[0] = SNGISDN_Q931_FACILITY_IE_ID;
+		my_data[1] = data_len;
+		memcpy(&my_data[2], data, data_len);
+
+		sngisdn_add_raw_data((sngisdn_chan_data_t*)ftdmchan->call_data, my_data, data_len+2);
+		
 		ftdm_log_chan_msg(ftdmchan, FTDM_LOG_DEBUG, "Raw Facility IE copied available\n");
 	} else {
 		/* Call libsng_isdn to process facility IE's here */
@@ -382,12 +461,14 @@ ftdm_status_t get_facility_ie_str(ftdm_channel_t *ftdmchan, uint8_t *data, uint8
 
 ftdm_status_t get_prog_ind_ie(ftdm_channel_t *ftdmchan, ProgInd *progInd)
 {
-	uint8_t val;	
+	uint8_t val;
+
 	if (!progInd->eh.pres) {
 		return FTDM_FAIL;
 	}
 
 	if (progInd->progDesc.pres) {
+		/* TODO: use get_ftdm_val function and table here */
 		switch (progInd->progDesc.val) {
 			case IN_PD_NOTETEISDN:
 				val = SNGISDN_PROGIND_DESCR_NETE_ISDN;
@@ -412,7 +493,7 @@ ftdm_status_t get_prog_ind_ie(ftdm_channel_t *ftdmchan, ProgInd *progInd)
 				val = SNGISDN_PROGIND_DESCR_INVALID;
 				break;
 		}
-		ftdm_call_add_var(&ftdmchan->caller_data, "isdn.prog_ind.descr", ftdm_sngisdn_progind_descr2str(val));
+		sngisdn_add_var((sngisdn_chan_data_t*)ftdmchan->call_data, "isdn.prog_ind.descr", ftdm_sngisdn_progind_descr2str(val));
 	}
 	
 	if (progInd->location.pres) {
@@ -443,7 +524,7 @@ ftdm_status_t get_prog_ind_ie(ftdm_channel_t *ftdmchan, ProgInd *progInd)
 				val = SNGISDN_PROGIND_LOC_INVALID;
 				break;
 		}
-		ftdm_call_add_var(&ftdmchan->caller_data, "isdn.prog_ind.loc", ftdm_sngisdn_progind_loc2str(val));
+		sngisdn_add_var((sngisdn_chan_data_t*)ftdmchan->call_data, "isdn.prog_ind.loc", ftdm_sngisdn_progind_loc2str(val));
 	}	
 	return FTDM_SUCCESS;
 }
@@ -465,19 +546,11 @@ ftdm_status_t set_calling_num(ftdm_channel_t *ftdmchan, CgPtyNmb *cgPtyNmb)
 	cgPtyNmb->presInd0.val      = caller_data->pres;
 	
 	cgPtyNmb->nmbPlanId.pres	= PRSNT_NODEF;
-	if (caller_data->cid_num.plan >= FTDM_NPI_INVALID) {
-		cgPtyNmb->nmbPlanId.val		= FTDM_NPI_UNKNOWN;
-	} else {
-		cgPtyNmb->nmbPlanId.val		= caller_data->cid_num.plan;
-	}
+	cgPtyNmb->nmbPlanId.val = get_trillium_val(npi_codes, caller_data->cid_num.plan, IN_NP_UNK);
 
 	cgPtyNmb->typeNmb1.pres		= PRSNT_NODEF;
 
-	if (caller_data->cid_num.type >= FTDM_TON_INVALID) {
-		cgPtyNmb->typeNmb1.val		= FTDM_TON_UNKNOWN;
-	} else {
-		cgPtyNmb->typeNmb1.val		= caller_data->cid_num.type;
-	}
+	cgPtyNmb->typeNmb1.val = get_trillium_val(ton_codes, caller_data->cid_num.type, IN_TON_UNK);
 
 	cgPtyNmb->nmbDigits.pres	= PRSNT_NODEF;
 	cgPtyNmb->nmbDigits.len		= len;
@@ -493,7 +566,7 @@ ftdm_status_t set_calling_num2(ftdm_channel_t *ftdmchan, CgPtyNmb *cgPtyNmb)
 	uint8_t len,val;
 	ftdm_caller_data_t *caller_data = &ftdmchan->caller_data;
 	
-	string = ftdm_call_get_var(caller_data, "isdn.cg_pty2.digits");
+	string = ftdm_usrmsg_get_var(ftdmchan->usrmsg, "isdn.cg_pty2.digits");
 	if ((string == NULL) || !(*string)) {
 		return FTDM_FAIL;
 	}
@@ -510,8 +583,8 @@ ftdm_status_t set_calling_num2(ftdm_channel_t *ftdmchan, CgPtyNmb *cgPtyNmb)
 	cgPtyNmb->screenInd.pres	= PRSNT_NODEF;
 
 	val = FTDM_SCREENING_INVALID;
-	string = ftdm_call_get_var(caller_data, "isdn.cg_pty2.screening_ind");
-	if ((string != NULL) && (*string)) {
+	string = ftdm_usrmsg_get_var(ftdmchan->usrmsg, "isdn.cg_pty2.screening_ind");
+	if (!ftdm_strlen_zero(string)) {
 		val = ftdm_str2ftdm_screening(string);
 	}
 
@@ -527,8 +600,8 @@ ftdm_status_t set_calling_num2(ftdm_channel_t *ftdmchan, CgPtyNmb *cgPtyNmb)
 	cgPtyNmb->presInd0.pres = PRSNT_NODEF;
 	
 	val = FTDM_PRES_INVALID;
-	string = ftdm_call_get_var(caller_data, "isdn.cg_pty2.presentation_ind");
-	if ((string != NULL) && (*string)) {
+	string = ftdm_usrmsg_get_var(ftdmchan->usrmsg, "isdn.cg_pty2.presentation_ind");
+	if (!ftdm_strlen_zero(string)) {
 		val = ftdm_str2ftdm_presentation(string);
 	}
 
@@ -542,30 +615,30 @@ ftdm_status_t set_calling_num2(ftdm_channel_t *ftdmchan, CgPtyNmb *cgPtyNmb)
 	cgPtyNmb->nmbPlanId.pres	= PRSNT_NODEF;
 	
 	val = FTDM_NPI_INVALID;
-	string = ftdm_call_get_var(caller_data, "isdn.cg_pty2.npi");
-	if ((string != NULL) && (*string)) {
+	string = ftdm_usrmsg_get_var(ftdmchan->usrmsg, "isdn.cg_pty2.npi");
+	if (!ftdm_strlen_zero(string)) {
 		val = ftdm_str2ftdm_npi(string);
 	}
 
 	if (val == FTDM_NPI_INVALID) {
 		cgPtyNmb->nmbPlanId.val = caller_data->cid_num.plan;
 	} else {
-		cgPtyNmb->nmbPlanId.val	= val;
+		cgPtyNmb->nmbPlanId.val = get_trillium_val(npi_codes, val, IN_NP_UNK);
 	}
 
 	cgPtyNmb->typeNmb1.pres		= PRSNT_NODEF;
 
 	/* Type of Number */
 	val = FTDM_TON_INVALID;
-	string = ftdm_call_get_var(caller_data, "isdn.cg_pty2.ton");
-	if ((string != NULL) && (*string)) {
+	string = ftdm_usrmsg_get_var(ftdmchan->usrmsg, "isdn.cg_pty2.ton");
+	if (!ftdm_strlen_zero(string)) {
 		val = ftdm_str2ftdm_ton(string);
 	}
 
 	if (val == FTDM_TON_INVALID) {
 		cgPtyNmb->typeNmb1.val = caller_data->cid_num.type;
 	} else {
-		cgPtyNmb->typeNmb1.val = val;
+		cgPtyNmb->typeNmb1.val = get_trillium_val(ton_codes, val, IN_TON_UNK);
 	}
 	return FTDM_SUCCESS;
 }
@@ -578,21 +651,14 @@ ftdm_status_t set_called_num(ftdm_channel_t *ftdmchan, CdPtyNmb *cdPtyNmb)
 	if (!len) {
 		return FTDM_SUCCESS;
 	}
-	cdPtyNmb->eh.pres           = PRSNT_NODEF;
-
-	cdPtyNmb->nmbPlanId.pres      = PRSNT_NODEF;
-	if (caller_data->dnis.plan >= FTDM_NPI_INVALID) {
-		cdPtyNmb->nmbPlanId.val       = FTDM_NPI_UNKNOWN;
-	} else {
-		cdPtyNmb->nmbPlanId.val       = caller_data->dnis.plan;
-	}
 	
-	cdPtyNmb->typeNmb0.pres       = PRSNT_NODEF;
-	if (caller_data->dnis.type >= FTDM_TON_INVALID) {
-		cdPtyNmb->typeNmb0.val        = FTDM_TON_UNKNOWN;
-	} else {
-		cdPtyNmb->typeNmb0.val        = caller_data->dnis.type;
-	}
+	cdPtyNmb->eh.pres			= PRSNT_NODEF;
+
+	cdPtyNmb->nmbPlanId.pres	= PRSNT_NODEF;
+	cdPtyNmb->nmbPlanId.val		= get_trillium_val(npi_codes, caller_data->dnis.plan, IN_NP_UNK);
+	
+	cdPtyNmb->typeNmb0.pres		= PRSNT_NODEF;
+	cdPtyNmb->typeNmb0.val		= get_trillium_val(ton_codes, caller_data->dnis.type, IN_TON_UNK);
 
 	cdPtyNmb->nmbDigits.pres = PRSNT_NODEF;
 	cdPtyNmb->nmbDigits.len = len;
@@ -613,18 +679,10 @@ ftdm_status_t set_redir_num(ftdm_channel_t *ftdmchan, RedirNmb *redirNmb)
 	redirNmb->eh.pres 	= PRSNT_NODEF;
 
 	redirNmb->nmbPlanId.pres 	= PRSNT_NODEF;
-	if (caller_data->rdnis.plan >= FTDM_NPI_INVALID) {
-		redirNmb->nmbPlanId.val	= FTDM_NPI_UNKNOWN;
-	} else {
-		redirNmb->nmbPlanId.val = caller_data->rdnis.plan;
-	}
+	redirNmb->nmbPlanId.val		= get_trillium_val(npi_codes, caller_data->rdnis.plan, IN_NP_UNK);
 
 	redirNmb->typeNmb.pres		= PRSNT_NODEF;
-	if (caller_data->rdnis.type >= FTDM_TON_INVALID) {
-		redirNmb->typeNmb.val		= FTDM_TON_UNKNOWN;
-	} else {
-		redirNmb->typeNmb.val		= caller_data->rdnis.type;
-	}
+	redirNmb->typeNmb.val		= get_trillium_val(ton_codes, caller_data->rdnis.type, IN_TON_UNK);
 
 	redirNmb->nmbDigits.pres = PRSNT_NODEF;
 	redirNmb->nmbDigits.len = len;
@@ -671,11 +729,21 @@ ftdm_status_t set_calling_name(ftdm_channel_t *ftdmchan, ConEvnt *conEvnt)
 			/* follow through */
 		case SNGISDN_SWITCH_5ESS:
 		case SNGISDN_SWITCH_4ESS:
-		case SNGISDN_SWITCH_DMS100:
-			conEvnt->display.eh.pres = PRSNT_NODEF;
 			conEvnt->display.dispInfo.pres = PRSNT_NODEF;
 			conEvnt->display.dispInfo.len = len;
 			memcpy(conEvnt->display.dispInfo.val, caller_data->cid_name, len);
+			break;
+		case SNGISDN_SWITCH_DMS100:
+			conEvnt->ntDisplay[0].eh.pres = PRSNT_NODEF;
+			conEvnt->ntDisplay[0].dispTypeNt.pres = PRSNT_NODEF;
+			conEvnt->ntDisplay[0].dispTypeNt.val = 0x01; /* Calling Party Name */
+			conEvnt->ntDisplay[0].assocInfo.pres = PRSNT_NODEF;
+			conEvnt->ntDisplay[0].assocInfo.val  = 0x03; /* Included */
+			conEvnt->ntDisplay[0].eh.pres = PRSNT_NODEF;
+			conEvnt->ntDisplay[0].eh.pres = PRSNT_NODEF;
+			conEvnt->ntDisplay[0].dispInfo.pres = PRSNT_NODEF;
+			conEvnt->ntDisplay[0].dispInfo.len = len;
+			memcpy(conEvnt->ntDisplay[0].dispInfo.val, caller_data->cid_name, len);
 			break;
 		case SNGISDN_SWITCH_QSIG:
 			/* It seems like QSIG does not support Caller ID Name */
@@ -691,7 +759,7 @@ ftdm_status_t set_calling_name(ftdm_channel_t *ftdmchan, ConEvnt *conEvnt)
 ftdm_status_t set_calling_subaddr(ftdm_channel_t *ftdmchan, CgPtySad *cgPtySad)
 {
 	const char* clg_subaddr = NULL;
-	clg_subaddr = ftdm_call_get_var(&ftdmchan->caller_data, "isdn.calling_subaddr");
+	clg_subaddr = ftdm_usrmsg_get_var(ftdmchan->usrmsg, "isdn.calling_subaddr");
 	if ((clg_subaddr != NULL) && (*clg_subaddr)) {
 		unsigned len = strlen (clg_subaddr);
 		cgPtySad->eh.pres = PRSNT_NODEF;
@@ -721,14 +789,19 @@ ftdm_status_t set_facility_ie(ftdm_channel_t *ftdmchan, FacilityStr *facilityStr
 
 ftdm_status_t set_facility_ie_str(ftdm_channel_t *ftdmchan, uint8_t *data, uint8_t *data_len)
 {
-	int len;
-	ftdm_caller_data_t *caller_data = &ftdmchan->caller_data;
-	if (caller_data->raw_data_len > 0 && caller_data->raw_data[0] == SNGISDN_Q931_FACILITY_IE_ID) {
-		len = caller_data->raw_data[1];
-		memcpy(data, &caller_data->raw_data[2], len);
-		*data_len = len;
-		return FTDM_SUCCESS;
-	}	
+	ftdm_size_t len;
+	uint8_t *mydata;
+	void *vdata;
+
+	if (ftdm_usrmsg_get_raw_data(ftdmchan->usrmsg, &vdata, &len) == FTDM_SUCCESS) {
+		mydata = vdata;
+		if (len > 2 && mydata[0] == SNGISDN_Q931_FACILITY_IE_ID) {
+			len = mydata[1];
+			memcpy(data, &mydata[2], len);
+			*data_len = len;
+			return FTDM_SUCCESS;
+		}
+	}
 	return FTDM_FAIL;
 }
 
@@ -738,8 +811,8 @@ ftdm_status_t set_prog_ind_ie(ftdm_channel_t *ftdmchan, ProgInd *progInd, ftdm_s
 	int descr = prog_ind.descr;
 	int loc = prog_ind.loc;
 	
-	str = ftdm_call_get_var(&ftdmchan->caller_data, "isdn.prog_ind.descr");
-	if (str && *str) {
+	str = ftdm_usrmsg_get_var(ftdmchan->usrmsg, "isdn.prog_ind.descr");
+	if (!ftdm_strlen_zero(str)) {
 		/* User wants to override progress indicator */
 		descr = ftdm_str2ftdm_sngisdn_progind_descr(str);
 	}
@@ -749,8 +822,8 @@ ftdm_status_t set_prog_ind_ie(ftdm_channel_t *ftdmchan, ProgInd *progInd, ftdm_s
 		return FTDM_SUCCESS;
 	}
 
-	str = ftdm_call_get_var(&ftdmchan->caller_data, "isdn.prog_ind.loc");
-	if (str && *str) {
+	str = ftdm_usrmsg_get_var(ftdmchan->usrmsg, "isdn.prog_ind.loc");
+	if (!ftdm_strlen_zero(str)) {
 		loc = ftdm_str2ftdm_sngisdn_progind_loc(str);
 	}
 	if (loc == SNGISDN_PROGIND_LOC_INVALID) {
@@ -819,11 +892,50 @@ ftdm_status_t set_prog_ind_ie(ftdm_channel_t *ftdmchan, ProgInd *progInd, ftdm_s
 	return FTDM_SUCCESS;
 }
 
+ftdm_status_t set_user_to_user_ie(ftdm_channel_t *ftdmchan, UsrUsr *usrUsr)
+{
+	sngisdn_chan_data_t *sngisdn_info = ftdmchan->call_data;
+
+	if (sngisdn_info->transfer_data.type == SNGISDN_TRANSFER_ATT_COURTESY_VRU_DATA) {
+		usrUsr->eh.pres = PRSNT_NODEF;
+
+		usrUsr->protocolDisc.pres = PRSNT_NODEF;
+		usrUsr->protocolDisc.val = 0x08;
+		usrUsr->usrInfo.pres = PRSNT_NODEF;
+		usrUsr->usrInfo.len = strlen(sngisdn_info->transfer_data.tdata.att_courtesy_vru.data);
+		memcpy(usrUsr->usrInfo.val, sngisdn_info->transfer_data.tdata.att_courtesy_vru.data, usrUsr->usrInfo.len);
+		ftdm_log_chan(ftdmchan, FTDM_LOG_DEBUG, "Sending AT&T Transfer data len:%d\n", usrUsr->usrInfo.len);
+
+		return FTDM_SUCCESS;
+	}
+
+	return FTDM_SUCCESS;
+}
+
+ftdm_status_t set_cause_ie(ftdm_channel_t *ftdmchan, CauseDgn *causeDgn)
+{
+
+	causeDgn->eh.pres = PRSNT_NODEF;
+	causeDgn->location.pres = PRSNT_NODEF;
+	causeDgn->location.val = IN_LOC_PRIVNETLU;
+	causeDgn->codeStand3.pres = PRSNT_NODEF;
+	causeDgn->codeStand3.val = IN_CSTD_CCITT;
+	causeDgn->causeVal.pres = PRSNT_NODEF;
+	causeDgn->causeVal.val = ftdmchan->caller_data.hangup_cause;
+	causeDgn->recommend.pres = NOTPRSNT;
+	causeDgn->dgnVal.pres = NOTPRSNT;
+	return FTDM_SUCCESS;
+}
+
 ftdm_status_t set_chan_id_ie(ftdm_channel_t *ftdmchan, ChanId *chanId)
 {
+	sngisdn_chan_data_t *sngisdn_info = (sngisdn_chan_data_t*)ftdmchan->call_data;
 	if (!ftdmchan) {
 		return FTDM_SUCCESS;
 	}
+
+	ftdm_set_flag(sngisdn_info, FLAG_SENT_CHAN_ID);
+
 	chanId->eh.pres = PRSNT_NODEF;
 	chanId->prefExc.pres = PRSNT_NODEF;
 	chanId->prefExc.val = IN_PE_EXCLSVE;
@@ -832,8 +944,7 @@ ftdm_status_t set_chan_id_ie(ftdm_channel_t *ftdmchan, ChanId *chanId)
 	chanId->intIdentPres.pres = PRSNT_NODEF;
 	chanId->intIdentPres.val = IN_IIP_IMPLICIT;
 
-	if (ftdmchan->span->trunk_type == FTDM_TRUNK_BRI ||
-		   ftdmchan->span->trunk_type == FTDM_TRUNK_BRI_PTMP) {
+	if (FTDM_SPAN_IS_BRI(ftdmchan->span)) {
 
 		/* BRI only params */
 		chanId->intType.pres = PRSNT_NODEF;
@@ -861,7 +972,7 @@ ftdm_status_t set_chan_id_ie(ftdm_channel_t *ftdmchan, ChanId *chanId)
 ftdm_status_t set_bear_cap_ie(ftdm_channel_t *ftdmchan, BearCap *bearCap)
 {
 	sngisdn_span_data_t *signal_data = (sngisdn_span_data_t*) ftdmchan->span->signal_data;
-	
+
 	bearCap->eh.pres = PRSNT_NODEF;
 	bearCap->infoTranCap.pres = PRSNT_NODEF;
 	bearCap->infoTranCap.val = sngisdn_get_infoTranCap_from_user(ftdmchan->caller_data.bearer_capability);
@@ -910,7 +1021,15 @@ ftdm_status_t set_restart_ind_ie(ftdm_channel_t *ftdmchan, RstInd *rstInd)
 	return FTDM_SUCCESS;
 }
 
-void sngisdn_t3_timeout(void* p_sngisdn_info)
+ftdm_status_t set_not_ind_ie(ftdm_channel_t *ftdmchan, NotInd *notInd)
+{
+	notInd->eh.pres = PRSNT_NODEF;
+	notInd->notDesc.pres = PRSNT_NODEF;
+	notInd->notDesc.val = 0x71; /* Call information event */
+	return FTDM_SUCCESS;
+}
+
+void sngisdn_t3_timeout(void *p_sngisdn_info)
 {
 	sngisdn_chan_data_t *sngisdn_info = (sngisdn_chan_data_t*)p_sngisdn_info;
 	ftdm_channel_t *ftdmchan = sngisdn_info->ftdmchan;
@@ -932,7 +1051,30 @@ void sngisdn_t3_timeout(void* p_sngisdn_info)
 	ftdm_mutex_unlock(ftdmchan->mutex);
 }
 
-void sngisdn_delayed_setup(void* p_sngisdn_info)
+void sngisdn_restart_timeout(void *p_signal_data)
+{
+	sngisdn_span_data_t *signal_data = (sngisdn_span_data_t *)p_signal_data;
+	ftdm_span_t *span = signal_data->ftdm_span;
+	ftdm_iterator_t *chaniter = NULL;
+	ftdm_iterator_t *curr = NULL;
+
+	ftdm_log(FTDM_LOG_DEBUG, "s%d:Did not receive a RESTART from remote switch in %d ms - restarting\n", span->name, signal_data->restart_timeout);
+
+	chaniter = ftdm_span_get_chan_iterator(span, NULL);
+	for (curr = chaniter; curr; curr = ftdm_iterator_next(curr)) {
+		ftdm_channel_t *ftdmchan = (ftdm_channel_t*)ftdm_iterator_current(curr);
+		if (FTDM_IS_VOICE_CHANNEL(ftdmchan)) {
+			ftdm_mutex_lock(ftdmchan->mutex);
+			if (ftdmchan->state == FTDM_CHANNEL_STATE_DOWN) {
+				ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_RESET);
+			}
+			ftdm_mutex_unlock(ftdmchan->mutex);
+		}
+	}
+	return;
+}
+
+void sngisdn_delayed_setup(void *p_sngisdn_info)
 {
 	sngisdn_chan_data_t *sngisdn_info = (sngisdn_chan_data_t*)p_sngisdn_info;
 	ftdm_channel_t *ftdmchan = sngisdn_info->ftdmchan;
@@ -943,7 +1085,7 @@ void sngisdn_delayed_setup(void* p_sngisdn_info)
 	return;
 }
 
-void sngisdn_delayed_release(void* p_sngisdn_info)
+void sngisdn_delayed_release(void *p_sngisdn_info)
 {
 	sngisdn_chan_data_t *sngisdn_info = (sngisdn_chan_data_t*)p_sngisdn_info;	
 	ftdm_channel_t *ftdmchan = sngisdn_info->ftdmchan;
@@ -966,7 +1108,7 @@ void sngisdn_delayed_release(void* p_sngisdn_info)
 	return;
 }
 
-void sngisdn_delayed_connect(void* p_sngisdn_info)
+void sngisdn_delayed_connect(void *p_sngisdn_info)
 {
 	sngisdn_chan_data_t *sngisdn_info = (sngisdn_chan_data_t*)p_sngisdn_info;	
 	ftdm_channel_t *ftdmchan = sngisdn_info->ftdmchan;
@@ -981,7 +1123,7 @@ void sngisdn_delayed_connect(void* p_sngisdn_info)
 	return;
 }
 
-void sngisdn_delayed_disconnect(void* p_sngisdn_info)
+void sngisdn_delayed_disconnect(void *p_sngisdn_info)
 {
 	sngisdn_chan_data_t *sngisdn_info = (sngisdn_chan_data_t*)p_sngisdn_info;	
 	ftdm_channel_t *ftdmchan = sngisdn_info->ftdmchan;
@@ -1003,7 +1145,7 @@ void sngisdn_delayed_disconnect(void* p_sngisdn_info)
 	return;
 }
 
-void sngisdn_facility_timeout(void* p_sngisdn_info)
+void sngisdn_facility_timeout(void *p_sngisdn_info)
 {
 	sngisdn_chan_data_t *sngisdn_info = (sngisdn_chan_data_t*)p_sngisdn_info;
 	ftdm_channel_t *ftdmchan = sngisdn_info->ftdmchan;
@@ -1054,25 +1196,34 @@ ftdm_status_t sngisdn_check_free_ids(void)
 	return FTDM_SUCCESS;
 }
 
-void get_memory_info(void)
+void sngisdn_get_memory_info(void)
 {
+#ifdef WIN32
+	/* SRegInfoShow is not formally supported by Trillium with Windows */
+	ftdm_log(FTDM_LOG_WARNING, "SRegInfoShow not supported on Windows\n");
+#else	
+	/* SRegInfoShow is not formally supported by Trillium in Linux either, but
+	 * it seems like its working fine so far */
 	U32 availmen = 0;
 	SRegInfoShow(S_REG, &availmen);
+#endif	
 	return;
 }
+
 
 uint8_t sngisdn_get_infoTranCap_from_user(ftdm_bearer_cap_t bearer_capability)
 {
 	switch(bearer_capability) {
 	case FTDM_BEARER_CAP_SPEECH:
 		return IN_ITC_SPEECH;
-	case FTDM_BEARER_CAP_64K_UNRESTRICTED:
+	case FTDM_BEARER_CAP_UNRESTRICTED:
 		return IN_ITC_UNRDIG;
 	case FTDM_BEARER_CAP_3_1KHZ_AUDIO:
 		return IN_ITC_A31KHZ;
 	case FTDM_BEARER_CAP_INVALID:
 		return IN_ITC_SPEECH;
-		/* Do not put a default case here, so we can see compile warnings if we have unhandled cases */
+	default:
+		return IN_ITC_SPEECH;
 	}
 	return FTDM_BEARER_CAP_SPEECH;
 }
@@ -1088,7 +1239,8 @@ uint8_t sngisdn_get_usrInfoLyr1Prot_from_user(ftdm_user_layer1_prot_t layer1_pro
 		return IN_UIL1_G711ALAW;
 	case FTDM_USER_LAYER1_PROT_INVALID:
 		return IN_UIL1_G711ULAW;
-	/* Do not put a default case here, so we can see compile warnings if we have unhandled cases */
+	default:
+		return IN_UIL1_G711ULAW;
 	}
 	return IN_UIL1_G711ULAW;
 }
@@ -1097,9 +1249,9 @@ ftdm_bearer_cap_t sngisdn_get_infoTranCap_from_stack(uint8_t bearer_capability)
 {
 	switch(bearer_capability) {
 	case IN_ITC_SPEECH:
-		return FTDM_BEARER_CAP_SPEECH;		
+		return FTDM_BEARER_CAP_SPEECH;
 	case IN_ITC_UNRDIG:
-		return FTDM_BEARER_CAP_64K_UNRESTRICTED;		
+		return FTDM_BEARER_CAP_UNRESTRICTED;
 	case IN_ITC_A31KHZ:
 		return FTDM_BEARER_CAP_3_1KHZ_AUDIO;
 	default:
@@ -1123,7 +1275,7 @@ ftdm_user_layer1_prot_t sngisdn_get_usrInfoLyr1Prot_from_stack(uint8_t layer1_pr
 	return FTDM_USER_LAYER1_PROT_ULAW;
 }
 
-void sngisdn_print_phy_stats(ftdm_stream_handle_t *stream, ftdm_span_t *span)
+ftdm_status_t sngisdn_show_l1_stats(ftdm_stream_handle_t *stream, ftdm_span_t *span)
 {
 	L1Mngmt sts;
 	sngisdn_span_data_t *signal_data = (sngisdn_span_data_t*)span->signal_data;
@@ -1161,11 +1313,11 @@ void sngisdn_print_phy_stats(ftdm_stream_handle_t *stream, ftdm_span_t *span)
 	stream->write_function(stream, "   TX Errors Details");
 	stream->write_function(stream, "\n---------------------------------------------------------------------\n");
 	stream->write_function(stream, "Aborted:\t%u\tFifo:\t\t%u\tCarrier:\t%u\n", sts.t.sts.tx_aborted_errors, sts.t.sts.tx_fifo_errors, sts.t.sts.tx_carrier_errors);
-	return;
+	return FTDM_SUCCESS;
 }
 
 
-void sngisdn_print_span(ftdm_stream_handle_t *stream, ftdm_span_t *span)
+ftdm_status_t sngisdn_show_span(ftdm_stream_handle_t *stream, ftdm_span_t *span)
 {
 	ftdm_signaling_status_t sigstatus;
 	ftdm_alarm_flag_t alarmbits;
@@ -1180,19 +1332,90 @@ void sngisdn_print_span(ftdm_stream_handle_t *stream, ftdm_span_t *span)
 	stream->write_function(stream, "span:%s physical:%s signalling:%s\n",
 										span->name, alarmbits ? "ALARMED" : "OK",
 										ftdm_signaling_status2str(sigstatus));
-	return;
+	return FTDM_SUCCESS;
 }
 
-void sngisdn_print_spans(ftdm_stream_handle_t *stream)
+ftdm_status_t sngisdn_show_spans(ftdm_stream_handle_t *stream)
 {
 	int i;	
 	for(i=1;i<=MAX_L1_LINKS;i++) {		
 		if (g_sngisdn_data.spans[i]) {
-			sngisdn_print_span(stream, g_sngisdn_data.spans[i]->ftdm_span);
+			sngisdn_show_span(stream, g_sngisdn_data.spans[i]->ftdm_span);
 		}
 	}
-	return;
+	return FTDM_SUCCESS;
 }
+
+ftdm_status_t sngisdn_add_var(sngisdn_chan_data_t *sngisdn_info, const char* var, const char* val)
+{
+	char *t_name = 0, *t_val = 0;
+	if (!var || !val) {
+		return FTDM_FAIL;
+	}
+	if (!sngisdn_info->variables) {
+		/* initialize on first use */
+		sngisdn_info->variables = create_hashtable(16, ftdm_hash_hashfromstring, ftdm_hash_equalkeys);
+		ftdm_assert_return(sngisdn_info->variables, FTDM_FAIL, "Failed to create hash table\n");
+	}
+	t_name = ftdm_strdup(var);
+	t_val = ftdm_strdup(val);
+	hashtable_insert(sngisdn_info->variables, t_name, t_val, HASHTABLE_FLAG_FREE_KEY | HASHTABLE_FLAG_FREE_VALUE);
+	return FTDM_SUCCESS;
+}
+
+ftdm_status_t sngisdn_add_raw_data(sngisdn_chan_data_t *sngisdn_info, uint8_t* data, ftdm_size_t data_len)
+{
+	ftdm_assert_return(!sngisdn_info->raw_data, FTDM_FAIL, "Overwriting existing raw data\n");
+	
+	sngisdn_info->raw_data = ftdm_calloc(1, data_len);
+	ftdm_assert_return(sngisdn_info->raw_data, FTDM_FAIL, "Failed to allocate raw data\n");
+
+	memcpy(sngisdn_info->raw_data, data, data_len);
+	sngisdn_info->raw_data_len = data_len;
+	return FTDM_SUCCESS;
+}
+
+void sngisdn_send_signal(sngisdn_chan_data_t *sngisdn_info, ftdm_signal_event_t event_id)
+{
+	ftdm_sigmsg_t sigev;
+	ftdm_channel_t *ftdmchan = sngisdn_info->ftdmchan;
+
+	memset(&sigev, 0, sizeof(sigev));
+
+	sigev.chan_id = ftdmchan->chan_id;
+	sigev.span_id = ftdmchan->span_id;
+	sigev.channel = ftdmchan;
+	sigev.event_id = event_id;
+
+	if (sngisdn_info->variables) {
+		/*
+		* variables now belongs to the ftdm core, and
+		* will be cleared after sigev is processed by user. Set
+		* local pointer to NULL so we do not attempt to
+		* destroy it */
+		sigev.variables = sngisdn_info->variables;
+		sngisdn_info->variables = NULL;
+	}
+
+	if (sngisdn_info->raw_data) {
+		/*
+		* raw_data now belongs to the ftdm core, and
+		* will be cleared after sigev is processed by user. Set
+		* local pointer to NULL so we do not attempt to
+		* destroy it */
+		
+		sigev.raw.data = sngisdn_info->raw_data;
+		sigev.raw.len = sngisdn_info->raw_data_len;
+
+		sngisdn_info->raw_data = NULL;
+		sngisdn_info->raw_data_len = 0;
+	}
+	if (event_id == FTDM_SIGEVENT_TRANSFER_COMPLETED) {
+		sigev.ev_data.transfer_completed.response = sngisdn_info->transfer_data.response;
+	}
+	ftdm_span_send_signal(ftdmchan->span, &sigev);
+}
+
 
 /* For Emacs:
  * Local Variables:

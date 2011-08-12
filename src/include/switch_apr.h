@@ -24,6 +24,7 @@
  * Contributor(s):
  * 
  * Anthony Minessale II <anthm@freeswitch.org>
+ * Eliot Gable <egable@gmail.com>
  *
  * switch_apr.h -- APR includes header
  *
@@ -40,6 +41,9 @@
 #define SWITCH_APR_H
 
 SWITCH_BEGIN_EXTERN_C
+
+SWITCH_DECLARE(int) switch_status_is_timeup(int status);
+
 #ifdef WIN32
 typedef DWORD switch_thread_id_t;
 #else
@@ -143,6 +147,8 @@ SWITCH_DECLARE(int) switch_snprintf(_Out_z_cap_(len)
 									char *buf, _In_ switch_size_t len, _In_z_ _Printf_format_string_ const char *format, ...);
 
 SWITCH_DECLARE(int) switch_vasprintf(_Out_opt_ char **buf, _In_z_ _Printf_format_string_ const char *format, _In_ va_list ap);
+
+SWITCH_DECLARE(int) switch_vsnprintf(char *buf, switch_size_t len, const char *format, va_list ap);
 
 SWITCH_DECLARE(char *) switch_copy_string(_Out_z_cap_(dst_size)
 										  char *dst, _In_z_ const char *src, _In_ switch_size_t dst_size);
@@ -407,6 +413,65 @@ SWITCH_DECLARE(switch_status_t) switch_mutex_unlock(switch_mutex_t *lock);
  * @param lock the mutex on which to attempt the lock acquiring.
  */
 SWITCH_DECLARE(switch_status_t) switch_mutex_trylock(switch_mutex_t *lock);
+
+/** @} */
+
+/**
+ * @defgroup switch_atomic Multi-Threaded Adtomic Operations Routines
+ * @ingroup switch_apr
+ * @{
+ */
+
+/** Opaque type used for the atomic operations */
+#ifdef apr_atomic_t
+    typedef apr_atomic_t switch_atomic_t;
+#else
+    typedef uint32_t switch_atomic_t;
+#endif
+
+/**
+ * Some architectures require atomic operations internal structures to be
+ * initialized before use.
+ * @param pool The memory pool to use when initializing the structures.
+ */
+SWITCH_DECLARE(switch_status_t) switch_atomic_init(switch_memory_pool_t *pool);
+
+/**
+ * Uses an atomic operation to read the uint32 value at the location specified
+ * by mem.
+ * @param mem The location of memory which stores the value to read.
+ */
+SWITCH_DECLARE(uint32_t) switch_atomic_read(volatile switch_atomic_t *mem);
+
+/**
+ * Uses an atomic operation to set a uint32 value at a specified location of
+ * memory.
+ * @param mem The location of memory to set.
+ * @param val The uint32 value to set at the memory location.
+ */
+SWITCH_DECLARE(void) switch_atomic_set(volatile switch_atomic_t *mem, uint32_t val);
+
+/**
+ * Uses an atomic operation to add the uint32 value to the value at the
+ * specified location of memory.
+ * @param mem The location of the value to add to.
+ * @param val The uint32 value to add to the value at the memory location.
+ */
+SWITCH_DECLARE(void) switch_atomic_add(volatile switch_atomic_t *mem, uint32_t val);
+
+/**
+ * Uses an atomic operation to increment the value at the specified memroy
+ * location.
+ * @param mem The location of the value to increment.
+ */
+SWITCH_DECLARE(void) switch_atomic_inc(volatile switch_atomic_t *mem);
+
+/**
+ * Uses an atomic operation to decrement the value at the specified memroy
+ * location.
+ * @param mem The location of the value to decrement.
+ */
+SWITCH_DECLARE(int)  switch_atomic_dec(volatile switch_atomic_t *mem);
 
 /** @} */
 
@@ -1140,6 +1205,8 @@ SWITCH_DECLARE(switch_status_t) switch_socket_send(switch_socket_t *sock, const 
  */
 SWITCH_DECLARE(switch_status_t) switch_socket_sendto(switch_socket_t *sock, switch_sockaddr_t *where, int32_t flags, const char *buf,
 													 switch_size_t *len);
+													
+SWITCH_DECLARE(switch_status_t) switch_socket_send_nonblock(switch_socket_t *sock, const char *buf, switch_size_t *len);
 
 /**
  * @param from The apr_sockaddr_t to fill in the recipient info

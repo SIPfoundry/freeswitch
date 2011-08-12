@@ -106,7 +106,10 @@ CORE_CFLAGS += -I$(switch_srcdir)/libs/spandsp/src -I$(switch_srcdir)/libs/tiff-
 
 CORE_LIBS  = libs/apr-util/libaprutil-1.la libs/apr/libapr-1.la
 CORE_LIBS += libs/sqlite/libsqlite3.la libs/pcre/libpcre.la libs/speex/libspeex/libspeexdsp.la
+if ENABLE_SRTP
+CORE_CFLAGS += -DENABLE_SRTP
 CORE_LIBS += libs/srtp/libsrtp.la
+endif
 
 MOD_LINK      = $(switch_srcdir)/libfreeswitch.la
 CLEANFILES    = src/include/switch_version.h src/include/switch_swigable_cpp.h
@@ -119,6 +122,10 @@ endif
 if HAVE_LIBEDIT
 CORE_CFLAGS += -I$(switch_srcdir)/libs/libedit/src -DSWITCH_HAVE_LIBEDIT
 CORE_LIBS   += libs/libedit/src/.libs/libedit.a
+endif
+
+if ENABLE_TIMERFD_WRAPPER
+CORE_CFLAGS += -DTIMERFD_WRAP
 endif
 
 ##
@@ -356,7 +363,7 @@ scripts/fsxs: scripts/fsxs.in
 ## misc
 ##
 
-pkgconfigdir = $(libdir)/pkgconfig
+pkgconfigdir   = @pkgconfigdir@
 pkgconfig_DATA = build/freeswitch.pc
 
 $(switch_builddir)/modules.conf:
@@ -559,6 +566,7 @@ update-clean: clean modwipe uninstall libs/openzap/Makefile python-reconf
 	cd libs/portaudio && $(MAKE) clean
 	cd libs/speex && $(MAKE) clean
 	cd libs/esl && $(MAKE) clean
+	cd libs/sqlite && $(MAKE) clean
 
 swigall:
 	@echo reswigging all

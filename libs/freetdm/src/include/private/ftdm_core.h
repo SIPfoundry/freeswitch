@@ -155,6 +155,10 @@ extern "C" {
 #define ftdm_clear_alarm_flag(obj, flag) (obj)->alarm_flags &= ~(flag)
 #define ftdm_test_alarm_flag(obj, flag) ((obj)->alarm_flags & flag)
 
+#define ftdm_set_io_flag(obj, flag) (obj)->io_flags |= (flag)
+#define ftdm_clear_io_flag(obj, flag) (obj)->io_flags &= ~(flag)
+#define ftdm_test_io_flag(obj, flag) ((obj)->io_flags & flag)
+
 /*!
   \brief Set a flag on an arbitrary object
   \command obj the object to set the flags on
@@ -355,35 +359,6 @@ typedef struct {
 	ftdm_mutex_t *mutex;
 } ftdm_dtmf_debug_t;
 
-typedef enum {
-	FTDM_IOSTATS_ERROR_CRC		= (1 << 0),
-	FTDM_IOSTATS_ERROR_FRAME	= (1 << 1),
-	FTDM_IOSTATS_ERROR_ABORT 	= (1 << 2),
-	FTDM_IOSTATS_ERROR_FIFO 	= (1 << 3),
-	FTDM_IOSTATS_ERROR_DMA		= (1 << 4),
-	FTDM_IOSTATS_ERROR_QUEUE_THRES	= (1 << 5), /* Queue reached high threshold */
-	FTDM_IOSTATS_ERROR_QUEUE_FULL	= (1 << 6), /* Queue is full */
-} ftdm_iostats_error_type_t;
-
-typedef struct {
-	struct {
-		uint32_t errors;
-		uint16_t flags;
-		uint8_t	 queue_size;	/* max queue size configured */
-		uint8_t	 queue_len;	/* Current number of elements in queue */
-		uint64_t packets;
-	} rx;
-
-	struct {
-		uint32_t errors;
-		uint16_t flags;
-		uint8_t  idle_packets;
-		uint8_t	 queue_size;	/* max queue size configured */
-		uint8_t	 queue_len;	/* Current number of elements in queue */
-		uint64_t packets;
-	} tx;
-} ftdm_channel_iostats_t;
-
 /* 2^8 table size, one for each byte (sample) value */
 #define FTDM_GAINS_TABLE_SIZE 256
 struct ftdm_channel {
@@ -399,6 +374,7 @@ struct ftdm_channel {
 	uint64_t flags;
 	uint32_t pflags;
 	uint32_t sflags;
+	uint8_t	 io_flags;
 	ftdm_alarm_flag_t alarm_flags;
 	ftdm_channel_feature_t features;
 	ftdm_codec_t effective_codec;
@@ -467,6 +443,7 @@ struct ftdm_channel {
 	ftdm_interrupt_t *state_completed_interrupt; /*!< Notify when a state change is completed */
 	int32_t txdrops;
 	int32_t rxdrops;
+	ftdm_usrmsg_t *usrmsg;
 };
 
 struct ftdm_span {
@@ -492,7 +469,7 @@ struct ftdm_span {
 	teletone_multi_tone_t tone_finder[FTDM_TONEMAP_INVALID+1];
 	ftdm_channel_t *channels[FTDM_MAX_CHANNELS_SPAN+1];
 	fio_channel_outgoing_call_t outgoing_call;
-	fio_channel_send_msg_t send_msg;
+	fio_channel_indicate_t indicate;
 	fio_channel_set_sig_status_t set_channel_sig_status;
 	fio_channel_get_sig_status_t get_channel_sig_status;
 	fio_span_set_sig_status_t set_span_sig_status;
@@ -502,6 +479,7 @@ struct ftdm_span {
 	ftdm_span_stop_t stop;
 	ftdm_channel_sig_read_t sig_read;
 	ftdm_channel_sig_write_t sig_write;
+	ftdm_channel_sig_dtmf_t sig_dtmf;
 	ftdm_channel_state_processor_t state_processor; /*!< This guy is called whenever state processing is required */
 	void *io_data; /*!< Private I/O data per span. Do not touch unless you are an I/O module */
 	char *type;
@@ -587,6 +565,14 @@ FT_DECLARE(ftdm_status_t) ftdm_span_close_all(void);
 FT_DECLARE(ftdm_status_t) ftdm_channel_open_chan(ftdm_channel_t *ftdmchan);
 FT_DECLARE(void) ftdm_ack_indication(ftdm_channel_t *ftdmchan, ftdm_channel_indication_t indication, ftdm_status_t status);
 
+
+FT_DECLARE(ftdm_iterator_t *) ftdm_get_iterator(ftdm_iterator_type_t type, ftdm_iterator_t *iter);
+
+FT_DECLARE(ftdm_status_t) ftdm_channel_process_media(ftdm_channel_t *ftdmchan, void *data, ftdm_size_t *datalen);
+
+FT_DECLARE(ftdm_status_t) ftdm_raw_read (ftdm_channel_t *ftdmchan, void *data, ftdm_size_t *datalen);
+FT_DECLARE(ftdm_status_t) ftdm_raw_write (ftdm_channel_t *ftdmchan, void *data, ftdm_size_t *datalen);
+
 /*! 
  * \brief Retrieves an event from the span
  *
@@ -624,27 +610,55 @@ FT_DECLARE(ftdm_status_t) ftdm_span_trigger_signals(const ftdm_span_t *span);
 /*! \brief clear the tone detector state */
 FT_DECLARE(void) ftdm_channel_clear_detected_tones(ftdm_channel_t *ftdmchan);
 
-/* start/stop echo cancelling at the beginning/end of a call */
+/*! \brief adjust echocanceller for beginning of call */
 FT_DECLARE(void) ftdm_set_echocancel_call_begin(ftdm_channel_t *chan);
+
+/*! \brief adjust echocanceller for end of call */
 FT_DECLARE(void) ftdm_set_echocancel_call_end(ftdm_channel_t *chan);
 
-/*! \brief Clear all variables  attached to the call
- *  \note Variables are cleared at the end of each call back, so it is not necessary for the user to call this function.
+/*! \brief save data from user */
+FT_DECLARE(ftdm_status_t) ftdm_channel_save_usrmsg(ftdm_channel_t *ftdmchan, ftdm_usrmsg_t *usrmsg);
+
+/*! \brief free usrmsg and variables/raw data attached to it */
+FT_DECLARE(ftdm_status_t) ftdm_usrmsg_free(ftdm_usrmsg_t **usrmsg);
+
+/*! \brief Get a custom variable from the user message
+ *  \note The variable pointer returned is only valid while the before the event is processed and it'll be destroyed once the event is processed. */
+FT_DECLARE(const char *) ftdm_usrmsg_get_var(ftdm_usrmsg_t *usrmsg, const char *var_name);
+
+/*! \brief Get raw data from user message
+ *  \param usrmsg The message structure containing the variables
+ *  \param data	data will point to available data pointer if available
+ *  \param datalen datalen will be set to length of data available
+ *  \retval FTDM_SUCCESS data is available
+ *  \retval FTDM_FAIL no data available
+ *  \note data is only valid within the duration of the callback, to receive a data pointer that does not get
+ *  \note destroyed when callback returns, see ftdm_sigmsg_get_raw_data_detached
+ */
+FT_DECLARE(ftdm_status_t) ftdm_usrmsg_get_raw_data(ftdm_usrmsg_t *usrmsg, void **data, ftdm_size_t *datalen);
+
+/*! \brief free sigmsg and variables/raw data attached to it */
+FT_DECLARE(ftdm_status_t) ftdm_sigmsg_free(ftdm_sigmsg_t **sigmsg);
+
+/*! \brief Add a custom variable to the event
+ *  \note This variables may be used by signaling modules to override signaling parameters
  *  \todo Document which signaling variables are available
  * */
-FT_DECLARE(ftdm_status_t) ftdm_call_clear_vars(ftdm_caller_data_t *caller_data);
+FT_DECLARE(ftdm_status_t) ftdm_sigmsg_add_var(ftdm_sigmsg_t *sigmsg, const char *var_name, const char *value);
 
-/*! \brief Remove a variable attached to the call
- *  \note Removes a variable that was attached to the call.
- *  \todo Document which call variables are available
- * */
-FT_DECLARE(ftdm_status_t) ftdm_call_remove_var(ftdm_caller_data_t *caller_data, const char *var_name);
+/*! \brief Remove a custom variable from the event
+ *  \note The variable pointer returned is only valid while the before the event is processed and it'll be destroyed once the event is processed. */
+FT_DECLARE(ftdm_status_t) ftdm_sigmsg_remove_var(ftdm_sigmsg_t *sigmsg, const char *var_name);
 
-/*! \brief Clears all the temporary data attached to this call
- *  \note Clears caller_data->variables and caller_data->raw_data.
- * */
-FT_DECLARE(void) ftdm_call_clear_data(ftdm_caller_data_t *caller_data);
-		
+/*! \brief Attach raw data to sigmsg
+ *  \param sigmsg The message structure containing the variables
+ *  \param data pointer to data
+ *  \param datalen datalen length of data
+ *  \retval FTDM_SUCCESS success, data was successfully saved
+ *  \retval FTDM_FAIL failed, event already had data attached to it.
+ *  \note data must have been allocated using ftdm_calloc, FreeTDM will free data once the usrmsg is processed.
+ */
+FT_DECLARE(ftdm_status_t) ftdm_sigmsg_set_raw_data(ftdm_sigmsg_t *sigmsg, void *data, ftdm_size_t datalen);
 
 /*!
   \brief Assert condition
@@ -676,8 +690,8 @@ FT_DECLARE(void) ftdm_call_clear_data(ftdm_caller_data_t *caller_data);
 */
 #define ftdm_socket_close(it) if (it > -1) { close(it); it = -1;}
 
-#define ftdm_channel_lock(chan) ftdm_mutex_lock(chan->mutex)
-#define ftdm_channel_unlock(chan) ftdm_mutex_unlock(chan->mutex)
+#define ftdm_channel_lock(chan) ftdm_mutex_lock((chan)->mutex)
+#define ftdm_channel_unlock(chan) ftdm_mutex_unlock((chan)->mutex)
 
 #define ftdm_log_throttle(level, ...) \
 	time_current_throttle_log = ftdm_current_time_in_ms(); \
@@ -733,6 +747,13 @@ static __inline__ int16_t ftdm_saturated_add(int16_t sample1, int16_t sample2)
 		addres = -32767;
 	return (int16_t)addres;
 }
+
+/* Bitmap helper functions */
+typedef long ftdm_bitmap_t;
+#define FTDM_BITMAP_NBITS (sizeof(ftdm_bitmap_t) * 8)
+#define ftdm_map_set_bit(map, bit) (map[(bit/FTDM_BITMAP_NBITS)] |= ((ftdm_bitmap_t)1 << (bit % FTDM_BITMAP_NBITS)))
+#define ftdm_map_clear_bit(map, bit) (map[(bit/FTDM_BITMAP_NBITS)] &= ~((ftdm_bitmap_t)1 << (bit % FTDM_BITMAP_NBITS)))
+#define ftdm_map_test_bit(map, bit) (map[(bit/FTDM_BITMAP_NBITS)] & ((ftdm_bitmap_t)1 << (bit % FTDM_BITMAP_NBITS)))
 
 #ifdef __cplusplus
 }

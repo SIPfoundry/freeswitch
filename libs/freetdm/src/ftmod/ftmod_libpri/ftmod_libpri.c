@@ -34,6 +34,10 @@
 #include "private/ftdm_core.h"
 #include "ftmod_libpri.h"
 
+#ifndef MIN
+#define MIN(x,y)	(((x) < (y)) ? (x) : (y))
+#endif
+
 static void _ftdm_channel_set_state_force(ftdm_channel_t *chan, const ftdm_channel_state_t state)
 {
 	assert(chan);
@@ -93,10 +97,7 @@ static FIO_SPAN_GET_SIG_STATUS_FUNCTION(isdn_get_span_sig_status)
  */
 static FIO_CHANNEL_OUTGOING_CALL_FUNCTION(isdn_outgoing_call)
 {
-	ftdm_status_t status = FTDM_SUCCESS;
-	ftdm_set_flag(ftdmchan, FTDM_CHANNEL_OUTBOUND);
-	ftdm_set_state_locked(ftdmchan, FTDM_CHANNEL_STATE_DIALING);
-	return status;
+	return FTDM_SUCCESS;
 }
 
 /**
@@ -203,6 +204,32 @@ static int parse_debug(const char *in, uint32_t *flags)
 	return res;
 }
 
+/**
+ * \brief Parses a change status string to flags
+ * \param in change status string to parse for
+ * \return Flags
+ */
+static int parse_change_status(const char *in)
+{
+	int flags = 0;
+	if (!in) {
+		return 0;
+	}
+
+	if (strstr(in, "in_service") || strstr(in, "in")) {
+		flags = SERVICE_CHANGE_STATUS_INSERVICE;
+	}
+	if (strstr(in, "maintenance") || strstr(in, "maint")) {
+		flags = SERVICE_CHANGE_STATUS_MAINTENANCE;
+	}
+	if (strstr(in, "out_of_service") || strstr(in, "out")) {
+		flags = SERVICE_CHANGE_STATUS_OUTOFSERVICE;
+	}
+
+
+	return flags;
+}
+
 static int print_debug(uint32_t flags, char *tmp, const int size)
 {
 	int offset = 0;
@@ -239,6 +266,9 @@ static ftdm_io_interface_t ftdm_libpri_interface;
 static const char *ftdm_libpri_usage =
 	"Usage:\n"
 	"libpri kill <span>\n"
+	"libpri reset <span>\n"
+	"libpri restart <span> <channel/all>\n"
+	"libpri maintenance <span> <channel/all> <in/maint/out>\n"
 	"libpri debug <span> [all|none|flag,...flagN]\n"
 	"\n"
 	"Possible debug flags:\n"
@@ -338,8 +368,78 @@ static FIO_API_FUNCTION(ftdm_libpri_api)
 				goto done;
 			}
 		}
+		if (!strcasecmp(argv[0], "reset")) {
+			ftdm_span_t *span = NULL;
+			if (ftdm_span_find_by_name(argv[1], &span) == FTDM_SUCCESS) {
+				ftdm_libpri_data_t *isdn_data = span->signal_data;
+				if (span->start != ftdm_libpri_start) {
+					stream->write_function(stream, "%s: -ERR invalid span.\n", __FILE__);
+					goto done;
+				}
+
+				pri_restart(isdn_data->spri.pri);
+				stream->write_function(stream, "%s: +OK reset.\n", __FILE__);
+				goto done;
+			} else {
+				stream->write_function(stream, "%s: -ERR invalid span.\n", __FILE__);
+				goto done;
+			}
+		}
+		if (!strcasecmp(argv[0], "restart") && argc == 3) {
+			ftdm_span_t *span = NULL;
+			if (ftdm_span_find_by_name(argv[1], &span) == FTDM_SUCCESS) {
+				ftdm_libpri_data_t *isdn_data = span->signal_data;
+				if (span->start != ftdm_libpri_start) {
+					stream->write_function(stream, "%s: -ERR invalid span.\n", __FILE__);
+					goto done;
+				}
+				if (!strcasecmp(argv[2], "all")) {
+					int j;
+					for(j = 1; j <= span->chan_count; j++) {
+						pri_reset(isdn_data->spri.pri, j);
+						ftdm_sleep(50);
+					}
+				} else {
+					pri_reset(isdn_data->spri.pri, atoi(argv[2]));
+				}
+				stream->write_function(stream, "%s: +OK restart set.\n", __FILE__);
+				goto done;
+			} else {
+				stream->write_function(stream, "%s: -ERR invalid span.\n", __FILE__);
+				goto done;
+			}
+		}
+		if (!strcasecmp(argv[0], "maintenance") && argc > 3) {
+			ftdm_span_t *span = NULL;
+			if (ftdm_span_find_by_name(argv[1], &span) == FTDM_SUCCESS) {
+				ftdm_libpri_data_t *isdn_data = span->signal_data;
+				if (span->start != ftdm_libpri_start) {
+					stream->write_function(stream, "%s: -ERR invalid span.\n", __FILE__);
+					goto done;
+				}
+				if (!isdn_data->service_message_support) {
+					stream->write_function(stream, "%s: -ERR service message support is disabled\n", __FILE__);
+					goto done;
+				}
+				if (!strcasecmp(argv[2], "all")) {
+					int j;
+					for(j = 1; j <= span->chan_count; j++) {
+						pri_maintenance_service(isdn_data->spri.pri, atoi(argv[1]), j, parse_change_status(argv[3]));
+						ftdm_sleep(50);
+					}
+				} else {
+					pri_maintenance_service(isdn_data->spri.pri, atoi(argv[1]), atoi(argv[2]), parse_change_status(argv[3]));
+				}
+				stream->write_function(stream, "%s: +OK change status set.\n", __FILE__);
+				goto done;
+			} else {
+				stream->write_function(stream, "%s: -ERR invalid span.\n", __FILE__);
+				goto done;
+			}
+		}
 
 	}
+
 	stream->write_function(stream, "%s: -ERR invalid command.\n", __FILE__);
 
 done:
@@ -479,12 +579,18 @@ static ftdm_state_map_t isdn_state_map = {
 			ZSD_INBOUND,
 			ZSM_UNACCEPTABLE,
 			{FTDM_CHANNEL_STATE_DOWN, FTDM_END},
-			{FTDM_CHANNEL_STATE_DIALTONE, FTDM_CHANNEL_STATE_RING, FTDM_END}
+			{FTDM_CHANNEL_STATE_DIALTONE, FTDM_CHANNEL_STATE_COLLECT, FTDM_CHANNEL_STATE_RING, FTDM_END}
 		},
 		{
 			ZSD_INBOUND,
 			ZSM_UNACCEPTABLE,
 			{FTDM_CHANNEL_STATE_DIALTONE, FTDM_END},
+			{FTDM_CHANNEL_STATE_RING, FTDM_CHANNEL_STATE_HANGUP, FTDM_CHANNEL_STATE_TERMINATING, FTDM_END}
+		},
+		{
+			ZSD_INBOUND,
+			ZSM_UNACCEPTABLE,
+			{FTDM_CHANNEL_STATE_COLLECT, FTDM_END},
 			{FTDM_CHANNEL_STATE_RING, FTDM_CHANNEL_STATE_HANGUP, FTDM_CHANNEL_STATE_TERMINATING, FTDM_END}
 		},
 		{
@@ -565,14 +671,18 @@ static ftdm_status_t state_advance(ftdm_channel_t *chan)
 	sig.chan_id = ftdm_channel_get_id(chan);
 	sig.span_id = ftdm_channel_get_span_id(chan);
 	sig.channel = chan;
-	
+
 	ftdm_channel_complete_state(chan);
 
 	switch (ftdm_channel_get_state(chan)) {
 	case FTDM_CHANNEL_STATE_DOWN:
 		{
 			ftdm_channel_t *chtmp = chan;
-			chan->call_data = NULL;
+
+			if (call) {
+				pri_destroycall(isdn_data->spri.pri, call);
+				chan->call_data = NULL;
+			}
 
 			if (ftdm_channel_close(&chtmp) != FTDM_SUCCESS) {
 				ftdm_log(FTDM_LOG_WARNING, "-- Failed to close channel %d:%d\n",
@@ -650,6 +760,29 @@ static ftdm_status_t state_advance(ftdm_channel_t *chan)
 			} else if (call) {
 				pri_proceeding(isdn_data->spri.pri, call, ftdm_channel_get_id(chan), 0);
 			} else {
+				ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_RESTART);
+			}
+		}
+		break;
+
+	case FTDM_CHANNEL_STATE_COLLECT:	/* Overlap receive */
+		{
+			if (!ftdm_test_flag(chan, FTDM_CHANNEL_OUTBOUND)) {
+				if (!call) {
+					ftdm_log_chan_msg(chan, FTDM_LOG_ERROR, "No call handle\n");
+					ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_RESTART);
+				}
+				else if (pri_need_more_info(isdn_data->spri.pri, call, ftdm_channel_get_id(chan), 0)) {
+					ftdm_caller_data_t *caller_data = ftdm_channel_get_caller_data(chan);
+
+					ftdm_log_chan_msg(chan, FTDM_LOG_ERROR, "Failed to send INFORMATION request\n");
+
+					/* hangup call */
+					caller_data->hangup_cause = FTDM_CAUSE_DESTINATION_OUT_OF_ORDER;
+					ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_HANGUP);
+				}
+			} else {
+				ftdm_log_chan_msg(chan, FTDM_LOG_ERROR, "Overlap receiving on outbound call?\n");
 				ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_RESTART);
 			}
 		}
@@ -743,7 +876,7 @@ static ftdm_status_t state_advance(ftdm_channel_t *chan)
 			}
 			assert(sr);
 
-			pri_sr_set_channel(sr, ftdm_channel_get_id(chan), 0, 0);
+			pri_sr_set_channel(sr, ftdm_channel_get_id(chan), 1, 0);
 			pri_sr_set_bearer(sr, PRI_TRANS_CAP_SPEECH, isdn_data->layer1);
 
 			pri_sr_set_called(sr, caller_data->dnis.digits, ton, 1);
@@ -779,8 +912,7 @@ static ftdm_status_t state_advance(ftdm_channel_t *chan)
 
 				pri_hangup(isdn_data->spri.pri, call, caller_data->hangup_cause);
 //				pri_destroycall(isdn_data->spri.pri, call);
-
-				chan->call_data = NULL;
+//				chan->call_data = NULL;
 			}
 			ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_HANGUP_COMPLETE);
 		}
@@ -788,10 +920,10 @@ static ftdm_status_t state_advance(ftdm_channel_t *chan)
 
 	case FTDM_CHANNEL_STATE_HANGUP_COMPLETE:
 		{
-			if (call) {
-				pri_destroycall(isdn_data->spri.pri, call);
-				chan->call_data = NULL;
-			}
+//			if (call) {
+//				pri_destroycall(isdn_data->spri.pri, call);
+//				chan->call_data = NULL;
+//			}
 			ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_DOWN);
 		}
 		break;
@@ -837,11 +969,57 @@ static __inline__ void check_state(ftdm_span_t *span)
  */
 static int on_info(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_event *pevent)
 {
-	ftdm_log(FTDM_LOG_DEBUG, "number is: %s\n", pevent->ring.callednum);
+	ftdm_span_t *span = spri->span;
+	ftdm_channel_t *chan = ftdm_span_get_channel(span, pevent->ring.channel);
+	ftdm_caller_data_t *caller_data = NULL;
 
-	if (strlen(pevent->ring.callednum) > 3) {
-		ftdm_log(FTDM_LOG_DEBUG, "final number is: %s\n", pevent->ring.callednum);
-		pri_answer(spri->pri, pevent->ring.call, 0, 1);
+	if (!chan) {
+		ftdm_log(FTDM_LOG_CRIT, "-- Info on channel %d:%d %s but it's not in use?\n", ftdm_span_get_id(span), pevent->ring.channel);
+		return 0;
+	}
+
+	caller_data = ftdm_channel_get_caller_data(chan);
+
+	switch (ftdm_channel_get_state(chan)) {
+	case FTDM_CHANNEL_STATE_COLLECT:	/* TE-mode overlap receiving */
+		ftdm_log_chan(chan, FTDM_LOG_DEBUG, "-- Incoming INFORMATION indication, current called number: '%s', number complete: %s\n",
+			pevent->ring.callednum, pevent->ring.complete ? "yes" : "no");
+
+		/* append digits to dnis */
+		if (!ftdm_strlen_zero(pevent->ring.callednum)) {
+			int digits = strlen(pevent->ring.callednum);
+			int offset = strlen(caller_data->dnis.digits);
+			int len    = MIN(sizeof(caller_data->dnis.digits) - 1 - offset, digits);	/* max. length without terminator */
+
+			if (len < digits) {
+				ftdm_log_chan(chan, FTDM_LOG_WARNING, "Length %d of digit string exceeds available space %d of DNIS, truncating!\n",
+					digits, len);
+			}
+
+			ftdm_copy_string(&caller_data->dnis.digits[offset], (char *)pevent->ring.callednum, len + 1);	/* max. length with terminator */
+			caller_data->dnis.digits[offset + len] = '\0';
+		}
+		if (pevent->ring.complete) {
+			ftdm_log_chan_msg(chan, FTDM_LOG_DEBUG, "Number complete indicated, moving channel to RING state\n");
+			/* notify switch */
+			ftdm_set_state(chan, FTDM_CHANNEL_STATE_RING);
+		}
+		break;
+	case FTDM_CHANNEL_STATE_DIALTONE:	/* NT-mode overlap receiving */
+		ftdm_log_chan(chan, FTDM_LOG_DEBUG, "-- Incoming INFORMATION indication, current called number: '%s'\n",
+			pevent->ring.callednum);
+
+		/* Need to add proper support for overlap receiving in NT-mode (requires FreeSWITCH + FreeTDM core support) */
+		if (strlen(pevent->ring.callednum) > 3) {
+			ftdm_log(FTDM_LOG_DEBUG, "final number is: %s\n", pevent->ring.callednum);
+			pri_answer(spri->pri, pevent->ring.call, 0, 1);
+		}
+		break;
+	default:
+		ftdm_log_chan(chan, FTDM_LOG_ERROR, "-- INFORMATION indication on channel %d:%d in invalid state '%s'\n",
+			ftdm_channel_get_span_id(chan),
+			ftdm_channel_get_id(chan),
+			ftdm_channel_get_state_str(chan));
 	}
 	return 0;
 }
@@ -857,7 +1035,6 @@ static int on_hangup(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_even
 {
 	ftdm_span_t *span = spri->span;
 	ftdm_channel_t *chan = ftdm_span_get_channel(span, pevent->hangup.channel);
-	q931_call *call = NULL;
 
 	if (!chan) {
 		ftdm_log(FTDM_LOG_CRIT, "-- Hangup on channel %d:%d %s but it's not in use?\n", ftdm_span_get_id(spri->span), pevent->hangup.channel);
@@ -866,26 +1043,68 @@ static int on_hangup(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_even
 
 	ftdm_channel_lock(chan);
 
-	if (ftdm_channel_get_state(chan) >= FTDM_CHANNEL_STATE_TERMINATING) {
-		ftdm_log_chan(chan, FTDM_LOG_DEBUG, "Ignoring remote hangup in state %s\n", ftdm_channel_get_state_str(chan));
-		goto done;
+	switch (event_type) {
+	case LPWRAP_PRI_EVENT_HANGUP_REQ:	/* DISCONNECT */
+		if (ftdm_channel_get_state(chan) >= FTDM_CHANNEL_STATE_TERMINATING) {
+			ftdm_log_chan(chan, FTDM_LOG_DEBUG, "Ignoring remote hangup in state %s\n",
+				ftdm_channel_get_state_str(chan));
+			goto done;
+		}
+		ftdm_log(FTDM_LOG_DEBUG, "-- Hangup REQ on channel %d:%d\n",
+			ftdm_span_get_id(spri->span), pevent->hangup.channel);
+
+		pri_hangup(spri->pri, pevent->hangup.call, pevent->hangup.cause);
+
+		chan->caller_data.hangup_cause = pevent->hangup.cause;
+
+		switch (ftdm_channel_get_state(chan)) {
+		case FTDM_CHANNEL_STATE_DIALTONE:
+		case FTDM_CHANNEL_STATE_COLLECT:
+			ftdm_set_state(chan, FTDM_CHANNEL_STATE_HANGUP);
+			break;
+		default:
+			ftdm_set_state(chan, FTDM_CHANNEL_STATE_TERMINATING);
+		}
+		break;
+
+	case LPWRAP_PRI_EVENT_HANGUP_ACK:	/* */
+		ftdm_log(FTDM_LOG_DEBUG, "-- Hangup ACK on channel %d:%d\n",
+			ftdm_span_get_id(spri->span), pevent->hangup.channel);
+
+		pri_hangup(spri->pri, pevent->hangup.call, pevent->hangup.cause);
+
+		ftdm_set_state(chan, FTDM_CHANNEL_STATE_HANGUP_COMPLETE);
+		break;
+
+	case LPWRAP_PRI_EVENT_HANGUP:	/* "RELEASE/RELEASE_COMPLETE/other" */
+		ftdm_log(FTDM_LOG_DEBUG, "-- Hangup on channel %d:%d\n",
+			ftdm_span_get_id(spri->span), pevent->hangup.channel);
+
+		switch (ftdm_channel_get_state(chan)) {
+		case FTDM_CHANNEL_STATE_DIALING:
+		case FTDM_CHANNEL_STATE_RINGING:
+		case FTDM_CHANNEL_STATE_PROGRESS:
+		case FTDM_CHANNEL_STATE_PROGRESS_MEDIA:
+		case FTDM_CHANNEL_STATE_PROCEED:
+		case FTDM_CHANNEL_STATE_UP:
+			chan->caller_data.hangup_cause = pevent->hangup.cause;
+			ftdm_set_state(chan, FTDM_CHANNEL_STATE_TERMINATING);
+			break;
+		case FTDM_CHANNEL_STATE_HANGUP:
+			chan->caller_data.hangup_cause = pevent->hangup.cause;
+			ftdm_set_state(chan, FTDM_CHANNEL_STATE_HANGUP_COMPLETE);
+			break;
+//		case FTDM_CHANNEL_STATE_TERMINATING:
+//			ftdm_set_state(chan, FTDM_CHANNEL_STATE_HANGUP);
+//			break;
+//		case FTDM_CHANNEL_STATE_HANGUP_COMPLETE:
+//			ftdm_set_state(chan, FTDM_CHANNEL_STATE_DOWN);
+//			break;
+		}
+		break;
+	default:
+		break;
 	}
-
-	if (!chan->call_data) {
-		ftdm_log_chan(chan, FTDM_LOG_DEBUG, "Ignoring remote hangup in state %s with no call data\n", ftdm_channel_get_state_str(chan));
-		goto done;
-	}
-
-	call = (q931_call *)chan->call_data;
-
-	ftdm_log(FTDM_LOG_DEBUG, "-- Hangup on channel %d:%d\n", ftdm_span_get_id(spri->span), pevent->hangup.channel);
-
-	pri_release(spri->pri, call, 0);
-	pri_destroycall(spri->pri, call);
-
-	chan->caller_data.hangup_cause = pevent->hangup.cause;
-	chan->call_data = NULL;
-	ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_TERMINATING);
 
 done:
 	ftdm_channel_unlock(chan);
@@ -946,12 +1165,12 @@ static int on_proceeding(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_
 
 	if (chan) {
 		/* Open channel if inband information is available */
-		if ((pevent->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE) && !ftdm_test_flag(chan, FTDM_CHANNEL_OPEN)) {
-			ftdm_log(FTDM_LOG_DEBUG, "-- In-band information available, opening B-Channel %d:%d\n",
+		if (pevent->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE) {
+			ftdm_log(FTDM_LOG_DEBUG, "-- In-band information available, B-Channel %d:%d\n",
 				ftdm_channel_get_span_id(chan),
 				ftdm_channel_get_id(chan));
 
-			if (ftdm_channel_open_chan(chan) != FTDM_SUCCESS) {
+			if (!ftdm_test_flag(chan, FTDM_CHANNEL_OPEN) && (ftdm_channel_open_chan(chan) != FTDM_SUCCESS)) {
 				ftdm_caller_data_t *caller_data = ftdm_channel_get_caller_data(chan);
 
 				ftdm_log(FTDM_LOG_ERROR, "-- Error opening channel %d:%d\n",
@@ -988,12 +1207,12 @@ static int on_progress(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_ev
 
 	if (chan) {
 		/* Open channel if inband information is available */
-		if ((pevent->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE) && !ftdm_test_flag(chan, FTDM_CHANNEL_OPEN)) {
-			ftdm_log(FTDM_LOG_DEBUG, "-- In-band information available, opening B-Channel %d:%d\n",
+		if (pevent->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE) {
+			ftdm_log(FTDM_LOG_DEBUG, "-- In-band information available, B-Channel %d:%d\n",
 				ftdm_channel_get_span_id(chan),
 				ftdm_channel_get_id(chan));
 
-			if (ftdm_channel_open_chan(chan) != FTDM_SUCCESS) {
+			if (!ftdm_test_flag(chan, FTDM_CHANNEL_OPEN) && (ftdm_channel_open_chan(chan) != FTDM_SUCCESS)) {
 				ftdm_caller_data_t *caller_data = ftdm_channel_get_caller_data(chan);
 
 				ftdm_log(FTDM_LOG_ERROR, "-- Error opening channel %d:%d\n",
@@ -1031,8 +1250,6 @@ static int on_ringing(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_eve
 	ftdm_channel_t *chan = ftdm_span_get_channel(span, pevent->ringing.channel);
 
 	if (chan) {
-		ftdm_log(FTDM_LOG_DEBUG, "-- Ringing on channel %d:%d\n", ftdm_span_get_id(span), pevent->ringing.channel);
-
 		/* we may get on_ringing even when we're already in FTDM_CHANNEL_STATE_PROGRESS_MEDIA */
 //		if (ftdm_channel_get_state(chan) == FTDM_CHANNEL_STATE_PROGRESS_MEDIA) {
 //			/* dont try to move to STATE_PROGRESS to avoid annoying veto warning */
@@ -1040,12 +1257,12 @@ static int on_ringing(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_eve
 //		}
 
 		/* Open channel if inband information is available */
-		if ((pevent->ringing.progressmask & PRI_PROG_INBAND_AVAILABLE) && !ftdm_test_flag(chan, FTDM_CHANNEL_OPEN)) {
-			ftdm_log(FTDM_LOG_DEBUG, "-- In-band information available, opening B-Channel %d:%d\n",
+		if ((pevent->ringing.progressmask & PRI_PROG_INBAND_AVAILABLE)) {
+			ftdm_log(FTDM_LOG_DEBUG, "-- In-band information available, B-Channel %d:%d\n",
 				ftdm_channel_get_span_id(chan),
 				ftdm_channel_get_id(chan));
 
-			if (ftdm_channel_open_chan(chan) != FTDM_SUCCESS) {
+			if (!ftdm_test_flag(chan, FTDM_CHANNEL_OPEN) && (ftdm_channel_open_chan(chan) != FTDM_SUCCESS)) {
 				ftdm_caller_data_t *caller_data = ftdm_channel_get_caller_data(chan);
 
 				ftdm_log(FTDM_LOG_ERROR, "-- Error opening channel %d:%d\n",
@@ -1056,9 +1273,13 @@ static int on_ringing(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_eve
 				ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_TERMINATING);
 				goto out;
 			}
+			ftdm_log(FTDM_LOG_DEBUG, "-- Ringing on channel %d:%d with media\n", ftdm_span_get_id(span), pevent->proceeding.channel);
+			ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_PROGRESS_MEDIA);
+		} else {
+//			ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_PROGRESS);
+			ftdm_log(FTDM_LOG_DEBUG, "-- Ringing on channel %d:%d\n", ftdm_span_get_id(span), pevent->proceeding.channel);
+			ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_RINGING);
 		}
-//		ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_PROGRESS);
-		ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_RINGING);
 	} else {
 		ftdm_log(FTDM_LOG_DEBUG, "-- Ringing on channel %d:%d but it's not in the span?\n",
 			ftdm_span_get_id(span), pevent->ringing.channel);
@@ -1077,6 +1298,7 @@ out:
 static int on_ring(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_event *pevent)
 {
 	ftdm_span_t *span = spri->span;
+	ftdm_libpri_data_t *isdn_data = span->signal_data;
 	ftdm_channel_t *chan = ftdm_span_get_channel(span, pevent->ring.channel);
 	ftdm_caller_data_t *caller_data = NULL;
 	int ret = 0;
@@ -1152,8 +1374,14 @@ static int on_ring(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_event 
 	/* hurr, this is valid as along as nobody releases the call */
 	chan->call_data = pevent->ring.call;
 
-	ftdm_set_state(chan, FTDM_CHANNEL_STATE_RING);
-
+	/* only go to RING state if we have the complete called number (indicated via pevent->complete flag) */
+	if (!pevent->ring.complete && (isdn_data->overlap & FTMOD_LIBPRI_OVERLAP_RECEIVE)) {
+		ftdm_log(FTDM_LOG_DEBUG, "RING event without complete indicator, waiting for more digits\n");
+		ftdm_set_state(chan, FTDM_CHANNEL_STATE_COLLECT);
+	} else {
+		ftdm_log(FTDM_LOG_DEBUG, "RING event with complete indicator (or overlap receive disabled)\n");
+		ftdm_set_state(chan, FTDM_CHANNEL_STATE_RING);
+	}
 done:
 	ftdm_channel_unlock(chan);
 	return ret;
@@ -1549,6 +1777,13 @@ static int on_dchan_down(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_
 static int on_anything(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_event *pevent)
 {
 	ftdm_log(FTDM_LOG_DEBUG, "-- Caught Event span %d %u (%s)\n", ftdm_span_get_id(spri->span), event_type, lpwrap_pri_event_str(event_type));
+	switch (pevent->e) {
+	case PRI_EVENT_CONFIG_ERR:
+		{
+			ftdm_log(FTDM_LOG_WARNING, "-- PRI error event: %s\n", pevent->err.err);
+		}
+		break;
+	}
 	return 0;
 }
 
@@ -1644,6 +1879,10 @@ static void *ftdm_libpri_run(ftdm_thread_t *me, void *obj)
 			pri_facility_enable(isdn_data->spri.pri);
 		}
 #endif
+		/* Support the different switch of service status */
+		if (isdn_data->service_message_support) {
+			pri_set_service_message_support(isdn_data->spri.pri, 1 /* True */);
+		}
 
 		if (res == 0) {
 			LPWRAP_MAP_PRI_EVENT(isdn_data->spri, LPWRAP_PRI_EVENT_ANY, on_anything);
@@ -1655,6 +1894,7 @@ static void *ftdm_libpri_run(ftdm_thread_t *me, void *obj)
 			LPWRAP_MAP_PRI_EVENT(isdn_data->spri, LPWRAP_PRI_EVENT_DCHAN_UP, on_dchan_up);
 			LPWRAP_MAP_PRI_EVENT(isdn_data->spri, LPWRAP_PRI_EVENT_DCHAN_DOWN, on_dchan_down);
 			LPWRAP_MAP_PRI_EVENT(isdn_data->spri, LPWRAP_PRI_EVENT_HANGUP_REQ, on_hangup);
+			LPWRAP_MAP_PRI_EVENT(isdn_data->spri, LPWRAP_PRI_EVENT_HANGUP_ACK, on_hangup);
 			LPWRAP_MAP_PRI_EVENT(isdn_data->spri, LPWRAP_PRI_EVENT_HANGUP, on_hangup);
 			LPWRAP_MAP_PRI_EVENT(isdn_data->spri, LPWRAP_PRI_EVENT_INFO_RECEIVED, on_info);
 			LPWRAP_MAP_PRI_EVENT(isdn_data->spri, LPWRAP_PRI_EVENT_RESTART, on_restart);
@@ -1836,6 +2076,25 @@ static int parse_ton(const char *ton)
 }
 
 /**
+ * \brief Parse overlap string to value
+ * \param	val	String to parse
+ * \return	Overlap flags
+ */
+static int parse_overlap_dial(const char *val)
+{
+	if (!strcasecmp(val, "yes") || !strcasecmp(val, "both"))
+		return FTMOD_LIBPRI_OVERLAP_BOTH;
+	if (!strcasecmp(val, "incoming") || !strcasecmp(val, "receive"))
+		return FTMOD_LIBPRI_OVERLAP_RECEIVE;
+	if (!strcasecmp(val, "outgoing") || !strcasecmp(val, "send"))
+		return FTMOD_LIBPRI_OVERLAP_SEND;
+	if (!strcasecmp(val, "no"))
+		return FTMOD_LIBPRI_OVERLAP_NONE;
+
+	return -1;
+}
+
+/**
  * \brief Parses an option string to flags
  * \param in String to parse for configuration options
  * \return Flags
@@ -1929,6 +2188,10 @@ static FIO_CONFIGURE_SPAN_SIGNALING_FUNCTION(ftdm_libpri_configure_span)
 	assert(isdn_data != NULL);
 	memset(isdn_data, 0, sizeof(*isdn_data));
 
+	/* set some default values */
+	isdn_data->mode = PRI_CPE;
+	isdn_data->ton  = PRI_UNKNOWN;
+
 	switch (ftdm_span_get_trunk_type(span)) {
 	case FTDM_TRUNK_BRI:
 	case FTDM_TRUNK_BRI_PTMP:
@@ -1939,12 +2202,14 @@ static FIO_CONFIGURE_SPAN_SIGNALING_FUNCTION(ftdm_libpri_configure_span)
 #endif
 	case FTDM_TRUNK_E1:
 		ftdm_log(FTDM_LOG_NOTICE, "Setting default Layer 1 to ALAW since this is an E1/BRI/BRI PTMP trunk\n");
-		isdn_data->layer1 = PRI_LAYER_1_ALAW;
+		isdn_data->layer1  = PRI_LAYER_1_ALAW;
+		isdn_data->dialect = PRI_SWITCH_EUROISDN_E1;
 		break;
 	case FTDM_TRUNK_T1:
 	case FTDM_TRUNK_J1:
 		ftdm_log(FTDM_LOG_NOTICE, "Setting default Layer 1 to ULAW since this is a T1/J1 trunk\n");
-		isdn_data->layer1 = PRI_LAYER_1_ULAW;
+		isdn_data->layer1  = PRI_LAYER_1_ULAW;
+		isdn_data->dialect = PRI_SWITCH_LUCENT5E;
 		break;
 	default:
 		ftdm_log(FTDM_LOG_ERROR, "Invalid trunk type: '%s'\n", ftdm_span_get_trunk_type_str(span));
@@ -1985,10 +2250,21 @@ static FIO_CONFIGURE_SPAN_SIGNALING_FUNCTION(ftdm_libpri_configure_span)
 		else if (!strcasecmp(var, "l1") || !strcasecmp(var, "layer1")) {
 			isdn_data->layer1 = parse_layer1(val);
 		}
+		else if (!strcasecmp(var, "overlapdial")) {
+			if ((isdn_data->overlap = parse_overlap_dial(val)) == -1) {
+				ftdm_log(FTDM_LOG_ERROR, "Invalid overlap flag, ignoring parameter\n");
+				isdn_data->overlap = FTMOD_LIBPRI_OVERLAP_NONE;
+			}
+		}
 		else if (!strcasecmp(var, "debug")) {
 			if (parse_debug(val, &isdn_data->debug_mask) == -1) {
 				ftdm_log(FTDM_LOG_ERROR, "Invalid debug flag, ignoring parameter\n");
 				isdn_data->debug_mask = 0;
+			}
+		}
+		else if (!strcasecmp(var, "service_message_support")) {
+			if (ftdm_true(val)) {
+				isdn_data->service_message_support = 1;
 			}
 		}
 		else {

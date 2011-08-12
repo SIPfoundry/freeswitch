@@ -67,7 +67,7 @@ static switch_xml_config_int_options_t config_int_ht_0 = { SWITCH_TRUE, 0 };
 
 static struct {
 	switch_hash_t *profile_hash;
-	char hostname[256];
+	const char *hostname;
 	int integer;
 	int debug;
 	char *dbname;
@@ -311,7 +311,7 @@ static switch_bool_t directory_execute_sql_callback(switch_mutex_t *mutex, char 
 }
 
 #define DIR_DESC "directory"
-#define DIR_USAGE "<profile_name> <domain_name> [<context_name>]"
+#define DIR_USAGE "<profile_name> <domain_name> [<context_name>] | [<dialplan_name> <context_name>]"
 
 static void free_profile(dir_profile_t *profile)
 {
@@ -834,6 +834,7 @@ SWITCH_STANDARD_APP(directory_function)
 	const char *profile_name = NULL;
 	const char *domain_name = NULL;
 	const char *context_name = NULL;
+	const char *dialplan_name = NULL;
 	dir_profile_t *profile = NULL;
 	int x = 0;
 	char *sql = NULL;
@@ -861,6 +862,14 @@ SWITCH_STANDARD_APP(directory_function)
 	}
 
 	if (argv[x]) {
+		if (!(argv[x+1])) {
+			context_name = argv[x++];
+		} else {
+			dialplan_name = argv[x++];
+		}
+	}
+
+	if (argv[x]) {
 		context_name = argv[x++];
 	}
 
@@ -871,6 +880,10 @@ SWITCH_STANDARD_APP(directory_function)
 
 	if (!context_name) {
 		context_name = domain_name;
+	}
+
+	if (!dialplan_name) {
+		dialplan_name = "XML";
 	}
 
 	populate_database(session, profile, domain_name);
@@ -919,7 +932,7 @@ SWITCH_STANDARD_APP(directory_function)
 
 	if (!zstr(s_param.transfer_to)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Directory transfering call to : %s\n", s_param.transfer_to);
-		switch_ivr_session_transfer(session, s_param.transfer_to, "XML", context_name);
+		switch_ivr_session_transfer(session, s_param.transfer_to, dialplan_name, context_name);
 	}
 
 	/* Delete all sql entry for this call */
@@ -949,7 +962,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_directory_load)
 	/* connect my internal structure to the blank pointer passed to me */
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
-	gethostname(globals.hostname, sizeof(globals.hostname));
+	globals.hostname = switch_core_get_switchname();
 
 	globals.dbname = switch_core_sprintf(pool, "directory");
 

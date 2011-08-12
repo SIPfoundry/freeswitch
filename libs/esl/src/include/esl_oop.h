@@ -56,11 +56,13 @@ class ESLevent {
 	virtual ~ESLevent();
 	const char *serialize(const char *format = NULL);
 	bool setPriority(esl_priority_t priority = ESL_PRIORITY_NORMAL);
-	const char *getHeader(const char *header_name);
+	const char *getHeader(const char *header_name, int idx = -1);
 	char *getBody(void);
 	const char *getType(void);
 	bool addBody(const char *value);
 	bool addHeader(const char *header_name, const char *value);
+	bool pushHeader(const char *header_name, const char *value);
+	bool unshiftHeader(const char *header_name, const char *value);
 	bool delHeader(const char *header_name);
 	const char *firstHeader(void);
 	const char *nextHeader(void);
@@ -82,7 +84,7 @@ class ESLconnection {
 	int send(const char *cmd);
 	ESLevent *sendRecv(const char *cmd);
 	ESLevent *api(const char *cmd, const char *arg = NULL);
-	ESLevent *bgapi(const char *cmd, const char *arg = NULL);
+	ESLevent *bgapi(const char *cmd, const char *arg = NULL, const char *job_uuid = NULL);
 	ESLevent *sendEvent(ESLevent *send_me);
 	ESLevent *recvEvent();
 	ESLevent *recvEventTimed(int ms);

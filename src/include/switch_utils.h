@@ -151,7 +151,11 @@ static inline char *switch_strchr_strict(const char *in, char find, const char *
 #endif
 static inline int switch_string_has_escaped_data(const char *in)
 {
-	const char *i = strchr(in, '\\');
+	const char *i;
+
+	switch_assert(in);
+
+	i = strchr(in, '\\');
 
 	while (i && *i == '\\') {
 		i++;
@@ -189,10 +193,12 @@ static inline char switch_itodtmf(char i)
 	char r = i;
 
 	if (i > 9 && i < 14) {
-		r = i + 55;
+		r += 55;
+	} else {
+		r += 48;
 	}
 
-	return r + 48;
+	return r;
 }
 
 static inline int switch_dtmftoi(char *s)
@@ -233,20 +239,23 @@ SWITCH_DECLARE(switch_size_t) switch_fd_read_line(int fd, char *buf, switch_size
 SWITCH_DECLARE(switch_status_t) switch_frame_alloc(switch_frame_t **frame, switch_size_t size);
 SWITCH_DECLARE(switch_status_t) switch_frame_dup(switch_frame_t *orig, switch_frame_t **clone);
 SWITCH_DECLARE(switch_status_t) switch_frame_free(switch_frame_t **frame);
+SWITCH_DECLARE(switch_bool_t) switch_is_number(const char *str);
 
 /*!
   \brief Evaluate the truthfullness of a string expression
   \param expr a string expression
   \return true or false 
 */
-#define switch_true(expr)\
-((expr && ( !strcasecmp(expr, "yes") ||\
-!strcasecmp(expr, "on") ||\
-!strcasecmp(expr, "true") ||\
-!strcasecmp(expr, "enabled") ||\
-!strcasecmp(expr, "active") ||\
-!strcasecmp(expr, "allow") ||\
-(switch_is_number(expr) && atoi(expr)))) ? SWITCH_TRUE : SWITCH_FALSE)
+static inline int switch_true(const char *expr) 
+{
+	return ((expr && ( !strcasecmp(expr, "yes") ||	
+					   !strcasecmp(expr, "on") ||	
+					   !strcasecmp(expr, "true") ||	
+					   !strcasecmp(expr, "enabled") ||	
+					   !strcasecmp(expr, "active") ||	
+					   !strcasecmp(expr, "allow") ||					
+					   (switch_is_number(expr) && atoi(expr)))) ? SWITCH_TRUE : SWITCH_FALSE);
+}
 
 #define switch_true_buf(expr)\
 ((( !strcasecmp(expr, "yes") ||\
@@ -262,14 +271,16 @@ SWITCH_DECLARE(switch_status_t) switch_frame_free(switch_frame_t **frame);
   \param expr a string expression
   \return true or false 
 */
-#define switch_false(expr)\
-((expr && ( !strcasecmp(expr, "no") ||\
-!strcasecmp(expr, "off") ||\
-!strcasecmp(expr, "false") ||\
-!strcasecmp(expr, "disabled") ||\
-!strcasecmp(expr, "inactive") ||\
-!strcasecmp(expr, "disallow") ||\
-(switch_is_number(expr) && !atoi(expr)))) ? SWITCH_TRUE : SWITCH_FALSE)
+static inline int switch_false(const char *expr)
+{
+	return ((expr && ( !strcasecmp(expr, "no") ||
+					   !strcasecmp(expr, "off") ||
+					   !strcasecmp(expr, "false") ||
+					   !strcasecmp(expr, "disabled") ||
+					   !strcasecmp(expr, "inactive") ||
+					   !strcasecmp(expr, "disallow") ||
+					   (switch_is_number(expr) && !atoi(expr)))) ? SWITCH_TRUE : SWITCH_FALSE);
+}
 
 
 SWITCH_DECLARE(switch_status_t) switch_resolve_host(const char *host, char *buf, size_t buflen);
@@ -494,6 +505,23 @@ static inline char *switch_clean_string(char *s)
 }
 
 
+static inline char *switch_clean_name_string(char *s)
+{
+	char *p;
+	for (p = s; p && *p; p++) {
+		uint8_t x = (uint8_t) * p;
+		if ((x < 32) ||	x == '\'' || x == '"' || x == '<' || x == '>' || x == '\\' || x == ':' || x == '@' || x == '/') {
+			*p = ' ';
+		}
+		if ( (p == s) && (*p == ' ') ) {
+			s++;
+		}
+	}
+
+	return s;
+}
+
+
 
 /*!
   \brief Free a pointer and set it to NULL unless it already is NULL
@@ -629,7 +657,7 @@ SWITCH_DECLARE(switch_time_t) switch_str_time(const char *in);
 #define switch_time_from_sec(sec)   ((switch_time_t)(sec) * 1000000)
 
 /*!
-  \brief Declares a function designed to set a dymaic global string
+  \brief Declares a function designed to set a dynamic global string
   \param fname the function name to declare
   \param vname the name of the global pointer to modify with the new function
 */
@@ -637,9 +665,9 @@ SWITCH_DECLARE(switch_time_t) switch_str_time(const char *in);
 		if (vname) {free(vname); vname = NULL;}vname = strdup(string);} static void fname(const char *string)
 
 /*!
-  \brief Separate a string into an array based on a character delimeter
+  \brief Separate a string into an array based on a character delimiter
   \param buf the string to parse
-  \param delim the character delimeter
+  \param delim the character delimiter
   \param array the array to split the values into
   \param arraylen the max number of elements in the array
   \return the number of elements added to the array
@@ -647,7 +675,7 @@ SWITCH_DECLARE(switch_time_t) switch_str_time(const char *in);
 SWITCH_DECLARE(unsigned int) switch_separate_string(_In_ char *buf, char delim, _Post_count_(return) char **array, unsigned int arraylen);
 SWITCH_DECLARE(unsigned int) switch_separate_string_string(char *buf, char *delim, _Post_count_(return) char **array, unsigned int arraylen);
 
-SWITCH_DECLARE(switch_bool_t) switch_is_number(const char *str);
+
 SWITCH_DECLARE(char *) switch_strip_spaces(char *str, switch_bool_t dup);
 SWITCH_DECLARE(char *) switch_strip_whitespace(const char *str);
 SWITCH_DECLARE(char *) switch_strip_commas(char *in, char *out, switch_size_t len);
@@ -765,9 +793,9 @@ SWITCH_DECLARE(int) switch_split_user_domain(char *in, char **user, char **domai
 
 /* malloc or DIE macros */
 #ifdef NDEBUG
-#define switch_malloc(ptr, len) (void)( (!!(ptr = malloc(len))) || (fprintf(stderr,"ABORT! Malloc failure at: %s:%s", __FILE__, __LINE__),abort(), 0), ptr )
-#define switch_zmalloc(ptr, len) (void)( (!!(ptr = calloc(1, (len)))) || (fprintf(stderr,"ABORT! Malloc failure at: %s:%s", __FILE__, __LINE__),abort(), 0), ptr)
-#define switch_strdup(ptr, s) (void)( (!!(ptr = strdup(s))) || (fprintf(stderr,"ABORT! Malloc failure at: %s:%s", __FILE__, __LINE__),abort(), 0), ptr)
+#define switch_malloc(ptr, len) (void)( (!!(ptr = malloc(len))) || (fprintf(stderr,"ABORT! Malloc failure at: %s:%d", __FILE__, __LINE__),abort(), 0), ptr )
+#define switch_zmalloc(ptr, len) (void)( (!!(ptr = calloc(1, (len)))) || (fprintf(stderr,"ABORT! Malloc failure at: %s:%d", __FILE__, __LINE__),abort(), 0), ptr)
+#define switch_strdup(ptr, s) (void)( (!!(ptr = strdup(s))) || (fprintf(stderr,"ABORT! Malloc failure at: %s:%d", __FILE__, __LINE__),abort(), 0), ptr)
 #else
 #if (_MSC_VER >= 1500)			// VC9+
 #define switch_malloc(ptr, len) (void)(assert(((ptr) = malloc((len)))),ptr);__analysis_assume( ptr )

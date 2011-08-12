@@ -57,6 +57,7 @@ SWITCH_BEGIN_EXTERN_C
 struct switch_app_log {
 	char *app;
 	char *arg;
+	switch_time_t stamp;
 	struct switch_app_log *next;
 };
 
@@ -247,6 +248,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_bug_close(_Inout_ switch_media
 SWITCH_DECLARE(switch_status_t) switch_core_media_bug_remove_all(_In_ switch_core_session_t *session);
 
 SWITCH_DECLARE(switch_status_t) switch_core_media_bug_enumerate(switch_core_session_t *session, switch_stream_handle_t *stream);
+SWITCH_DECLARE(switch_status_t) switch_core_media_bug_transfer_recordings(switch_core_session_t *orig_session, switch_core_session_t *new_session);
 
 /*!
   \brief Read a frame from the bug
@@ -433,6 +435,9 @@ SWITCH_DECLARE(void) switch_core_session_rwunlock(_In_ switch_core_session_t *se
   \return the current index/priority of this handler
 */
 SWITCH_DECLARE(int) switch_core_add_state_handler(_In_ const switch_state_handler_table_t *state_handler);
+
+SWITCH_DECLARE(int) switch_core_curl_count(int *val);
+SWITCH_DECLARE(int) switch_core_ssl_count(int *val);
 
 /*!
   \brief Remove a global state handler
@@ -762,6 +767,7 @@ SWITCH_DECLARE(char *) switch_core_get_variable(_In_z_ const char *varname);
 SWITCH_DECLARE(char *) switch_core_get_variable_dup(_In_z_ const char *varname);
 SWITCH_DECLARE(char *) switch_core_get_variable_pdup(_In_z_ const char *varname, switch_memory_pool_t *pool);
 SWITCH_DECLARE(const char *) switch_core_get_hostname(void);
+SWITCH_DECLARE(const char *) switch_core_get_switchname(void);
 
 /*! 
   \brief Add a global variable to the core
@@ -828,6 +834,10 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_message_send(_In_z_ const ch
 SWITCH_DECLARE(switch_status_t) switch_core_session_queue_message(_In_ switch_core_session_t *session, _In_ switch_core_session_message_t *message);
 
 SWITCH_DECLARE(void) switch_core_session_free_message(switch_core_session_message_t **message);
+
+
+SWITCH_DECLARE(switch_status_t) switch_core_session_queue_signal_data(switch_core_session_t *session, void *signal_data);
+SWITCH_DECLARE(switch_status_t) switch_core_session_dequeue_signal_data(switch_core_session_t *session, void **signal_data);
 
 /*! 
   \brief pass an indication message on a session
@@ -1183,7 +1193,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_recv_dtmf(_In_ switch_core_s
 ///\ingroup core1
 ///\{
 /*! 
-  \brief Initilize a hash table
+  \brief Initialize a hash table
   \param hash a NULL pointer to a hash table to aim at the new hash
   \param pool the pool to use for the new hash
   \return SWITCH_STATUS_SUCCESS if the hash is created
@@ -1221,7 +1231,15 @@ SWITCH_DECLARE(switch_status_t) switch_core_hash_insert(_In_ switch_hash_t *hash
   \note the string key must be a constant or a dynamic string
 */
 SWITCH_DECLARE(switch_status_t) switch_core_hash_insert_locked(_In_ switch_hash_t *hash, _In_z_ const char *key, _In_opt_ const void *data,
-															   _In_ switch_mutex_t *mutex);
+															   _In_opt_ switch_mutex_t *mutex);
+/*! 
+  \brief Retrieve data from a given hash
+  \param hash the hash to retrieve from
+  \param key the key to retrieve
+  \param mutex optional rwlock to wrlock
+  \return a pointer to the data held in the key
+*/
+SWITCH_DECLARE(switch_status_t) switch_core_hash_insert_wrlock(switch_hash_t *hash, const char *key, const void *data, switch_thread_rwlock_t *rwlock);
 
 /*! 
   \brief Delete data from a hash based on desired key
@@ -1238,7 +1256,16 @@ SWITCH_DECLARE(switch_status_t) switch_core_hash_delete(_In_ switch_hash_t *hash
   \param mutex optional mutex to lock
   \return SWITCH_STATUS_SUCCESS if the data is deleted
 */
-SWITCH_DECLARE(switch_status_t) switch_core_hash_delete_locked(_In_ switch_hash_t *hash, _In_z_ const char *key, _In_ switch_mutex_t *mutex);
+SWITCH_DECLARE(switch_status_t) switch_core_hash_delete_locked(_In_ switch_hash_t *hash, _In_z_ const char *key, _In_opt_ switch_mutex_t *mutex);
+
+/*! 
+  \brief Delete data from a hash based on desired key
+  \param hash the hash to delete from
+  \param key the key from which to delete the data
+  \param mutex optional rwlock to wrlock
+  \return SWITCH_STATUS_SUCCESS if the data is deleted
+*/
+SWITCH_DECLARE(switch_status_t) switch_core_hash_delete_wrlock(_In_ switch_hash_t *hash, _In_z_ const char *key, _In_opt_ switch_thread_rwlock_t *rwlock);
 
 /*! 
   \brief Delete data from a hash based on callback function
@@ -1265,6 +1292,15 @@ SWITCH_DECLARE(void *) switch_core_hash_find(_In_ switch_hash_t *hash, _In_z_ co
   \return a pointer to the data held in the key
 */
 SWITCH_DECLARE(void *) switch_core_hash_find_locked(_In_ switch_hash_t *hash, _In_z_ const char *key, _In_ switch_mutex_t *mutex);
+
+/*! 
+  \brief Retrieve data from a given hash
+  \param hash the hash to retrieve from
+  \param key the key to retrieve
+  \param mutex optional rwlock to rdlock
+  \return a pointer to the data held in the key
+*/
+SWITCH_DECLARE(void *) switch_core_hash_find_rdlock(_In_ switch_hash_t *hash, _In_z_ const char *key, _In_ switch_thread_rwlock_t *rwlock);
 
 /*!
  \brief Gets the first element of a hashtable
@@ -1940,6 +1976,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_management_exec(char *relative_oid, 
   \return 0 on success
 */
 SWITCH_DECLARE(int32_t) set_high_priority(void);
+SWITCH_DECLARE(int32_t) set_normal_priority(void);
 
 /*! 
   \brief Change user and/or group of the running process
@@ -2050,6 +2087,7 @@ SWITCH_DECLARE(void) switch_load_network_lists(switch_bool_t reload);
 SWITCH_DECLARE(switch_bool_t) switch_check_network_list_ip_token(const char *ip_str, const char *list_name, const char **token);
 #define switch_check_network_list_ip(_ip_str, _list_name) switch_check_network_list_ip_token(_ip_str, _list_name, NULL)
 SWITCH_DECLARE(void) switch_time_set_monotonic(switch_bool_t enable);
+SWITCH_DECLARE(void) switch_time_set_timerfd(switch_bool_t enable);
 SWITCH_DECLARE(void) switch_time_set_nanosleep(switch_bool_t enable);
 SWITCH_DECLARE(void) switch_time_set_matrix(switch_bool_t enable);
 SWITCH_DECLARE(void) switch_time_set_cond_yield(switch_bool_t enable);
@@ -2075,52 +2113,40 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_preprocess_session(switch_core_sessio
 */
 
 #define CACHE_DB_LEN 256
-	 typedef enum {
-		 CDF_INUSE = (1 << 0),
-		 CDF_PRUNE = (1 << 1)
-	 } cache_db_flag_t;
+typedef enum {
+	CDF_INUSE = (1 << 0),
+	CDF_PRUNE = (1 << 1)
+} cache_db_flag_t;
 
-	 typedef enum {
-		 SCDB_TYPE_CORE_DB,
-		 SCDB_TYPE_ODBC
-	 } switch_cache_db_handle_type_t;
+typedef enum {
+	SCDB_TYPE_CORE_DB,
+	SCDB_TYPE_ODBC
+} switch_cache_db_handle_type_t;
 
-	 typedef union {
-		 switch_core_db_t *core_db_dbh;
-		 switch_odbc_handle_t *odbc_dbh;
-	 } switch_cache_db_native_handle_t;
+typedef union {
+	switch_core_db_t *core_db_dbh;
+	switch_odbc_handle_t *odbc_dbh;
+} switch_cache_db_native_handle_t;
 
-	 typedef struct {
-		 char *db_path;
-	 } switch_cache_db_core_db_options_t;
+typedef struct {
+	char *db_path;
+} switch_cache_db_core_db_options_t;
 
-	 typedef struct {
-		 char *dsn;
-		 char *user;
-		 char *pass;
-	 } switch_cache_db_odbc_options_t;
+typedef struct {
+	char *dsn;
+	char *user;
+	char *pass;
+} switch_cache_db_odbc_options_t;
 
-	 typedef union {
-		 switch_cache_db_core_db_options_t core_db_options;
-		 switch_cache_db_odbc_options_t odbc_options;
-	 } switch_cache_db_connection_options_t;
+typedef union {
+	switch_cache_db_core_db_options_t core_db_options;
+	switch_cache_db_odbc_options_t odbc_options;
+} switch_cache_db_connection_options_t;
 
-	 typedef struct {
-		 char name[CACHE_DB_LEN];
-		 switch_cache_db_handle_type_t type;
-		 switch_cache_db_native_handle_t native_handle;
-		 time_t last_used;
-		 switch_mutex_t *mutex;
-		 switch_mutex_t *io_mutex;
-		 switch_memory_pool_t *pool;
-		 int32_t flags;
-		 unsigned long hash;
-		 char creator[CACHE_DB_LEN];
-		 char last_user[CACHE_DB_LEN];
-	 } switch_cache_db_handle_t;
+struct switch_cache_db_handle;
+typedef struct switch_cache_db_handle switch_cache_db_handle_t;
 
-
-	 static inline const char *switch_cache_db_type_name(switch_cache_db_handle_type_t type)
+static inline const char *switch_cache_db_type_name(switch_cache_db_handle_type_t type)
 {
 	const char *type_str = "INVALID";
 
@@ -2140,6 +2166,8 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_preprocess_session(switch_core_sessio
 	return type_str;
 }
 
+SWITCH_DECLARE(switch_cache_db_handle_type_t) switch_cache_db_get_type(switch_cache_db_handle_t *dbh);
+
 /*! 
  \brief Returns the handle to the pool, immediately available for other
  		threads to use.
@@ -2152,11 +2180,6 @@ SWITCH_DECLARE(void) switch_cache_db_dismiss_db_handle(switch_cache_db_handle_t 
  \param [in] The handle
 */
 SWITCH_DECLARE(void) switch_cache_db_release_db_handle(switch_cache_db_handle_t ** dbh);
-/*! 
- \brief Removes the handle from the pool and frees up the handle resources. 
- \param [in] The handle
-*/
-SWITCH_DECLARE(void) switch_cache_db_destroy_db_handle(switch_cache_db_handle_t ** dbh);
 /*! 
  \brief Gets a new cached handle from the pool, potentially creating a new connection.
  		The connection is bound to the thread until it (the thread) terminates unless
@@ -2217,20 +2240,51 @@ SWITCH_DECLARE(switch_bool_t) switch_cache_db_test_reactive(switch_cache_db_hand
 															const char *test_sql, const char *drop_sql, const char *reactive_sql);
 SWITCH_DECLARE(switch_status_t) switch_cache_db_persistant_execute(switch_cache_db_handle_t *dbh, const char *sql, uint32_t retries);
 SWITCH_DECLARE(switch_status_t) switch_cache_db_persistant_execute_trans(switch_cache_db_handle_t *dbh, char *sql, uint32_t retries);
-/*! 
- \brief Tries to detach all free connections from current thread.  
-*/
-SWITCH_DECLARE(void) switch_cache_db_detach(void);
+
+SWITCH_DECLARE(void) switch_core_set_signal_handlers(void);
 SWITCH_DECLARE(uint32_t) switch_core_debug_level(void);
 SWITCH_DECLARE(void) switch_cache_db_flush_handles(void);
 SWITCH_DECLARE(const char *) switch_core_banner(void);
 SWITCH_DECLARE(switch_bool_t) switch_core_session_in_thread(switch_core_session_t *session);
 SWITCH_DECLARE(uint32_t) switch_default_ptime(const char *name, uint32_t number);
 
+/*!
+ \brief Add user registration
+ \param [in] user
+ \param [in] realm
+ \param [in] token
+ \param [in] url - a freeswitch dial string
+ \param [in] expires
+ \param [in] network_ip
+ \param [in] network_port
+ \param [in] network_proto - one of tls, tcp, udp
+ \param [out] err - Error if it exists
+*/
 SWITCH_DECLARE(switch_status_t) switch_core_add_registration(const char *user, const char *realm, const char *token, const char *url, uint32_t expires, 
 															 const char *network_ip, const char *network_port, const char *network_proto);
+/*!
+ \brief Delete user registration
+ \param [in] user
+ \param [in] realm
+ \param [in] token
+ \param [out] err - Error if it exists
+*/
 SWITCH_DECLARE(switch_status_t) switch_core_del_registration(const char *user, const char *realm, const char *token);
+/*!
+ \brief Expire user registrations
+ \param [in] force delete all registrations
+ \param [out] err - Error if it exists
+*/
 SWITCH_DECLARE(switch_status_t) switch_core_expire_registration(int force);
+
+
+SWITCH_DECLARE(char *) switch_say_file_handle_get_variable(switch_say_file_handle_t *sh, const char *var);
+SWITCH_DECLARE(char *) switch_say_file_handle_get_path(switch_say_file_handle_t *sh);
+SWITCH_DECLARE(char *) switch_say_file_handle_detach_path(switch_say_file_handle_t *sh);
+SWITCH_DECLARE(void) switch_say_file_handle_destroy(switch_say_file_handle_t **sh);
+SWITCH_DECLARE(switch_status_t) switch_say_file_handle_create(switch_say_file_handle_t **sh, const char *ext, switch_event_t **var_event);
+SWITCH_DECLARE(void) switch_say_file(switch_say_file_handle_t *sh, const char *fmt, ...);
+
 
 SWITCH_END_EXTERN_C
 #endif

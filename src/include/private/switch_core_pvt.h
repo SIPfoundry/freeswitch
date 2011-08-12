@@ -84,7 +84,6 @@
 
 #define SWITCH_EVENT_QUEUE_LEN 256
 #define SWITCH_MESSAGE_QUEUE_LEN 256
-#define SWITCH_SQL_QUEUE_LEN 100000
 
 #define SWITCH_BUFFER_BLOCK_FRAMES 25
 #define SWITCH_BUFFER_START_FRAMES 50
@@ -145,6 +144,7 @@ struct switch_core_session {
 	void *private_info;
 	switch_queue_t *event_queue;
 	switch_queue_t *message_queue;
+	switch_queue_t *signal_data_queue;
 	switch_queue_t *private_event_queue;
 	switch_queue_t *private_event_queue_pri;
 	switch_thread_rwlock_t *bug_rwlock;
@@ -220,7 +220,7 @@ struct switch_runtime {
 	switch_mutex_t *throttle_mutex;
 	switch_mutex_t *session_hash_mutex;
 	switch_mutex_t *global_mutex;
-	switch_mutex_t *global_var_mutex;
+	switch_thread_rwlock_t *global_var_rwlock;
 	uint32_t sps_total;
 	int32_t sps;
 	int32_t sps_last;
@@ -240,6 +240,7 @@ struct switch_runtime {
 	uint32_t debug_level;
 	uint32_t runlevel;
 	uint32_t tipping_point;
+	uint32_t microseconds_per_tick;
 	int32_t timer_affinity;
 	switch_profile_timer_t *profile_timer;
 	double profile_time;
@@ -248,7 +249,12 @@ struct switch_runtime {
 	int max_sql_buffer_len;
 	switch_dbtype_t odbc_dbtype;
 	char hostname[256];
+	char *switchname;
 	int multiple_registrations;
+	uint32_t max_db_handles;
+	uint32_t db_handle_timeout;
+	int curl_count;
+	int ssl_count;
 };
 
 extern struct switch_runtime runtime;

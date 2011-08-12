@@ -200,7 +200,7 @@ void WINAPI ServiceCtrlHandler(DWORD control)
 /* the main service entry point */
 void WINAPI service_main(DWORD numArgs, char **args)
 {
-	switch_core_flag_t flags = SCF_USE_SQL | SCF_USE_AUTO_NAT | SCF_CALIBRATE_CLOCK | SCF_USE_CLOCK_RT;
+	switch_core_flag_t flags = SCF_USE_SQL | SCF_USE_AUTO_NAT | SCF_USE_NAT_MAPPING | SCF_CALIBRATE_CLOCK | SCF_USE_CLOCK_RT;
 	const char *err = NULL;		/* error value for return from freeswitch initialization */
 
 	/* Override flags if they have been set earlier */
@@ -364,7 +364,7 @@ int main(int argc, char *argv[])
 #ifdef __sun
 	switch_core_flag_t flags = SCF_USE_SQL;
 #else
-	switch_core_flag_t flags = SCF_USE_SQL | SCF_USE_AUTO_NAT | SCF_CALIBRATE_CLOCK | SCF_USE_CLOCK_RT;
+	switch_core_flag_t flags = SCF_USE_SQL | SCF_USE_AUTO_NAT | SCF_USE_NAT_MAPPING | SCF_CALIBRATE_CLOCK | SCF_USE_CLOCK_RT;
 #endif
 	int ret = 0;
 	switch_status_t destroy_status;
@@ -404,13 +404,15 @@ int main(int argc, char *argv[])
 #endif
 		"\t-help                  -- this message\n" "\t-version               -- print the version and exit\n"
 #ifdef HAVE_SETRLIMIT
-		"\t-waste                 -- allow memory waste\n" "\t-core                  -- dump cores\n"
+		"\t-waste                 -- allow memory waste\n" 
+		"\t-core                  -- dump cores\n"
 #endif
 		"\t-hp                    -- enable high priority settings\n"
 		"\t-vg                    -- run under valgrind\n"
 		"\t-nosql                 -- disable internal sql scoreboard\n"
 		"\t-heavy-timer           -- Heavy Timer, possibly more accurate but at a cost\n"
 		"\t-nonat                 -- disable auto nat detection\n"
+		"\t-nonatmap              -- disable auto nat port mapping\n"
 		"\t-nocal                 -- disable clock calibration\n"
 		"\t-nort                  -- disable clock clock_realtime\n"
 		"\t-stop                  -- stop freeswitch\n"
@@ -552,6 +554,13 @@ int main(int argc, char *argv[])
 		}
 
 		if (local_argv[x] && !strcmp(local_argv[x], "-waste")) {
+			fprintf(stderr, "WARNING: Wasting up to 8 megs of memory per thread.\n");
+			sleep(2);
+			waste++;
+			known_opt++;
+		}
+
+		if (local_argv[x] && !strcmp(local_argv[x], "-no-auto-stack")) {
 			waste++;
 			known_opt++;
 		}
@@ -569,6 +578,11 @@ int main(int argc, char *argv[])
 
 		if (local_argv[x] && !strcmp(local_argv[x], "-nonat")) {
 			flags &= ~SCF_USE_AUTO_NAT;
+			known_opt++;
+		}
+
+		if (local_argv[x] && !strcmp(local_argv[x], "-nonatmap")) {
+			flags &= ~SCF_USE_NAT_MAPPING;
 			known_opt++;
 		}
 
@@ -762,17 +776,17 @@ int main(int argc, char *argv[])
 
 #if defined(HAVE_SETRLIMIT) && !defined(__sun)
 	if (!waste && !(flags & SCF_VG)) {
-		int x;
+		//int x;
 
 		memset(&rlp, 0, sizeof(rlp));
-		x = getrlimit(RLIMIT_STACK, &rlp);
+		getrlimit(RLIMIT_STACK, &rlp);
 
 		if (rlp.rlim_max > SWITCH_THREAD_STACKSIZE) {
 			char buf[1024] = "";
 			int i = 0;
 
-			fprintf(stderr, "Error: stacksize %d is too large: run ulimit -s %d or run %s -waste.\nauto-adjusting stack size for optimal performance...\n",
-					(int) (rlp.rlim_max / 1024), SWITCH_THREAD_STACKSIZE / 1024, local_argv[0]);
+			fprintf(stderr, "Error: stacksize %d is too large: run ulimit -s %d from your shell before starting the application.\nauto-adjusting stack size for optimal performance...\n",
+					(int) (rlp.rlim_max / 1024), SWITCH_THREAD_STACKSIZE / 1024);
 			
 			memset(&rlp, 0, sizeof(rlp));
 			rlp.rlim_cur = SWITCH_THREAD_STACKSIZE;
@@ -816,6 +830,8 @@ int main(int argc, char *argv[])
 
 	if (high_prio) {
 		set_high_priority();
+	} else {
+		set_normal_priority();
 	}
 
 	switch_core_setrlimits();

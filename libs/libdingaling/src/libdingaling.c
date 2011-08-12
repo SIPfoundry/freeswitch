@@ -242,7 +242,7 @@ static void default_logger(char *file, const char *func, int line, int level, ch
 
 	vsnprintf(data, sizeof(data), fmt, ap);
 
-	fprintf(globals.log_stream, "%s:%d %s() %s", file, line, func, data);
+	fprintf(globals.log_stream, "%s:%d %s() %s", fp, line, func, data);
 
 	va_end(ap);
 
@@ -384,9 +384,12 @@ static ldl_status parse_session_code(ldl_handle_t *handle, char *id, char *from,
 	}
 
 	while(xml) {
-		char *type = xtype ? xtype : iks_find_attrib(xml, "type");
+		char *type = NULL;
 		iks *tag;
-		
+
+		if (iks_type(xml)!=IKS_CDATA)
+			type = xtype ? xtype : iks_find_attrib(xml, "type");
+
 		if (type) {
 			
 			if (!strcasecmp(type, "redirect")) {
@@ -604,7 +607,9 @@ static int on_disco_default(void *user_data, ikspak *pak)
 			int all = 0;
 			
 			iks_insert_attrib(iq, "from", handle->login);
-			iks_insert_attrib(iq, "to", pak->from->full);
+			if (pak->from) {
+				iks_insert_attrib(iq, "to", pak->from->full);
+			}
 			iks_insert_attrib(iq, "id", pak->id);
 			iks_insert_attrib(iq, "type", "result");
 					
@@ -1905,6 +1910,8 @@ void ldl_handle_send_msg(ldl_handle_t *handle, char *from, char *to, const char 
 	int on = 0;
 	int len = 0;
 	char *my_body = strdup(body);
+	char *my_body_base = my_body;
+
 	assert(handle != NULL);
 	assert(body != NULL);
 	
@@ -1949,7 +1956,9 @@ void ldl_handle_send_msg(ldl_handle_t *handle, char *from, char *to, const char 
 		free(bdup);
 	}
 
-	free(my_body);
+	if (my_body_base) {
+		free(my_body_base);
+	}
 
 	apr_queue_push(handle->queue, msg);
 	msg = NULL;

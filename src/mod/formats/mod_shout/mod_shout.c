@@ -36,7 +36,7 @@
 #include <switch.h>
 #include <shout/shout.h>
 #include <lame.h>
-#include <curl/curl.h>
+#include <switch_curl.h>
 
 #define OUTSCALE 8192 * 2
 #define MP3_SCACHE 16384 * 2
@@ -53,6 +53,9 @@ static struct {
 	char decoder[256];
 	float vol;
 	uint32_t outscale;
+	uint32_t brate;
+	uint32_t resample;
+	uint32_t quality;
 } globals;
 
 mpg123_handle *our_mpg123_new(const char *decoder, int *error)
@@ -172,7 +175,7 @@ static inline void free_context(shout_context_t *context)
 		}
 
 		if (context->fp) {
-			unsigned char mp3buffer[8192];
+			unsigned char mp3buffer[20480];
 			int len;
 			int16_t blank[2048] = { 0 }, *r = NULL;
 
@@ -494,7 +497,7 @@ static void *SWITCH_THREAD_FUNC write_stream_thread(switch_thread_t *thread, voi
 	}
 
 	while (!context->err && context->thread_running) {
-		unsigned char mp3buf[8192] = "";
+		unsigned char mp3buf[20480] = "";
 		int16_t audio[9600] = { 0 };
 		switch_size_t audio_read = 0;
 		int rlen = 0;
@@ -655,9 +658,6 @@ static switch_status_t shout_file_open(switch_file_handle_t *handle, const char 
 
 		}
 	} else if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
-		if (switch_test_flag(handle, SWITCH_FILE_WRITE_APPEND)) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Appending to MP3 not supported.\n");
-		}
 		if (!(context->gfp = lame_init())) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Could not allocate lame\n");
 			goto error;
@@ -670,17 +670,33 @@ static switch_status_t shout_file_open(switch_file_handle_t *handle, const char 
 
 		}
 		context->channels = handle->channels;
-		lame_set_brate(context->gfp, 16 * (handle->samplerate / 8000) * handle->channels);
+		
+		if (globals.brate) {
+			lame_set_brate(context->gfp, globals.brate);
+		} else {
+			lame_set_brate(context->gfp, 16 * (handle->samplerate / 8000) * handle->channels);
+		}
+		
 		lame_set_num_channels(context->gfp, handle->channels);
 		lame_set_in_samplerate(context->gfp, handle->samplerate);
-		lame_set_out_samplerate(context->gfp, handle->samplerate);
+		
+		if (globals.resample) {
+			lame_set_out_samplerate(context->gfp, globals.resample);
+		} else {
+			lame_set_out_samplerate(context->gfp, handle->samplerate);
+		}
 
 		if (handle->channels == 2) {
 			lame_set_mode(context->gfp, STEREO);
 		} else {
 			lame_set_mode(context->gfp, MONO);
 		}
-		lame_set_quality(context->gfp, 2);	/* 2=high  5 = medium  7=low */
+
+		if (globals.quality) {
+			lame_set_quality(context->gfp, globals.quality);
+		} else {
+			lame_set_quality(context->gfp, 2);      /* 2=high  5 = medium  7=low */
+		}
 
 		lame_set_errorf(context->gfp, log_error);
 		lame_set_debugf(context->gfp, log_debug);
@@ -781,8 +797,13 @@ static switch_status_t shout_file_open(switch_file_handle_t *handle, const char 
 			}
 
 		} else {
+			const char *mask = "wb+";
+			
+			if (switch_test_flag(handle, SWITCH_FILE_WRITE_APPEND)) {
+				mask = "ab+";
+			}
 			/* lame being lame and all has FILE * coded into it's API for some functions so we gotta use it */
-			if (!(context->fp = fopen(path, "wb+"))) {
+			if (!(context->fp = fopen(path, mask))) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error opening %s\n", path);
 				goto error;
 			}
@@ -1462,6 +1483,21 @@ static switch_status_t load_config(void)
 				if (tmp > 0) {
 					globals.outscale = tmp;
 				}
+			} else if (!strcmp(var, "encode-brate")) {
+				int tmp = atoi(val);
+				if (tmp > 0) {
+					globals.brate = tmp;
+				}
+			} else if (!strcmp(var, "encode-resample")) {
+				int tmp = atoi(val);
+				if (tmp > 0) {
+					globals.resample = tmp;
+				}
+			} else if (!strcmp(var, "encode-quality")) {
+				int tmp = atoi(val);
+				if (tmp > 0) {
+					globals.quality = tmp;
+				}
 			}
 		}
 	}
@@ -1480,7 +1516,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_shout_load)
 	supported_formats[0] = "shout";
 	supported_formats[1] = "mp3";
 
-	curl_global_init(CURL_GLOBAL_ALL);
+	switch_curl_init();
 
 	/* connect my internal structure to the blank pointer passed to me */
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
@@ -1507,7 +1543,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_shout_load)
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_shout_shutdown)
 {
-	curl_global_cleanup();
+	switch_curl_destroy();
 	mpg123_exit();
 	return SWITCH_STATUS_SUCCESS;
 }

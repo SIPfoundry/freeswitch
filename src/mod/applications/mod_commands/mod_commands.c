@@ -90,11 +90,11 @@ static switch_status_t select_url(const char *user,
 
 	if (exclude_contact) {
 		sql = switch_mprintf("select url, '%q' "
-							 "from registrations where user='%q' and realm='%q' "
+							 "from registrations where reg_user='%q' and realm='%q' "
 							 "and url not like '%%%s%%'", (concat != NULL) ? concat : "", user, domain, exclude_contact);
 	} else {
 		sql = switch_mprintf("select url, '%q' "
-							 "from registrations where user='%q' and realm='%q'",
+							 "from registrations where reg_user='%q' and realm='%q'",
 							 (concat != NULL) ? concat : "", user, domain);
 	}
 
@@ -115,6 +115,69 @@ static switch_status_t select_url(const char *user,
 
 	return SWITCH_STATUS_SUCCESS;
 }
+
+
+#define SAY_STRING_SYNTAX "<module_name>[.<ext>] <lang>[.<ext>] <say_type> <say_method> [<say_gender>] <text>"
+SWITCH_STANDARD_API(say_string_function)
+{
+	char *argv[6] = { 0 };
+	int argc;
+	char *lbuf = NULL, *string = NULL;
+	int err = 1, par = 0;
+	char *p, *ext = "wav";
+	char *tosay = NULL;
+	int strip = 0;
+
+	if (cmd) {
+		lbuf = strdup(cmd);
+	}
+
+	if (lbuf && (argc = switch_separate_string(lbuf, ' ', argv, (sizeof(argv) / sizeof(argv[0])))) && (argc == 5 || argc == 6)) {
+
+		if ((p = strchr(argv[0], '.'))) {
+			*p++ = '\0';
+			ext = p;
+			par++;
+		}
+
+		if (!par && (p = strchr(argv[1], '.'))) {
+			*p++ = '\0';
+			ext = p;
+		}
+
+		tosay = (argc == 5) ? argv[4] : argv[5];
+
+		if (*tosay == '~') {
+			tosay++;
+			strip++;
+		}
+
+		switch_ivr_say_string(session,
+							  argv[1],
+							  ext,
+							  tosay,
+							  argv[0], 
+							  argv[2], 
+							  argv[3], 
+							  (argc == 6) ? argv[4] : NULL , 
+							  &string);
+		if (string) {
+			stream->write_function(stream, "%s", strip ? string + 14 : string);
+			free(string);
+			err = 0;
+		}
+	}
+
+	if (err) {
+		stream->write_function(stream, "-ERR Usage: %s\n", SAY_STRING_SYNTAX);
+	}
+	
+	free(lbuf);
+
+	return SWITCH_STATUS_SUCCESS;
+	
+}
+
 
 SWITCH_STANDARD_API(reg_url_function)
 {
@@ -196,9 +259,13 @@ SWITCH_STANDARD_API(banner_function)
 
 SWITCH_STANDARD_API(hostname_api_function)
 {
-	char hostname[256] = "";
-	gethostname(hostname, sizeof(hostname));
-	stream->write_function(stream, "%s", hostname);
+	stream->write_function(stream, "%s", switch_core_get_hostname());
+	return SWITCH_STATUS_SUCCESS;
+}
+
+SWITCH_STANDARD_API(switchname_api_function)
+{
+	stream->write_function(stream, "%s", switch_core_get_switchname());
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -276,6 +343,7 @@ SWITCH_STANDARD_API(nat_map_function)
 	switch_port_t external_port = 0;
 	char *tmp = NULL;
 	switch_bool_t sticky = SWITCH_FALSE;
+	switch_bool_t mapping = SWITCH_TRUE;
 
 	if (!cmd) {
 		goto usage;
@@ -304,6 +372,24 @@ SWITCH_STANDARD_API(nat_map_function)
 		goto ok;
 	} else if (argv[0] && switch_stristr("reinit", argv[0])) {
 		switch_nat_reinit();
+		tmp = switch_nat_status();
+		stream->write_function(stream, tmp);
+		switch_safe_free(tmp);
+		goto ok;
+	}
+
+	if (argc < 2) {
+		goto usage;
+	}
+
+	if (argv[0] && switch_stristr("mapping", argv[0])) {
+		if (argv[1] && switch_stristr("enable", argv[1])) {
+			mapping = SWITCH_TRUE;
+		} else if (argv[1] && switch_stristr("disable", argv[1])) {
+			mapping = SWITCH_FALSE;
+		}
+
+		switch_nat_set_mapping(mapping);
 		tmp = switch_nat_status();
 		stream->write_function(stream, tmp);
 		switch_safe_free(tmp);
@@ -342,7 +428,7 @@ SWITCH_STANDARD_API(nat_map_function)
 	goto ok;
 
  usage:
-	stream->write_function(stream, "USAGE: nat_map [status|reinit|republish] | [add|del] <port> [tcp|udp] [sticky]");
+	stream->write_function(stream, "USAGE: nat_map [status|reinit|republish] | [add|del] <port> [tcp|udp] [sticky] | [mapping] <enable|disable>");
 
   ok:
 
@@ -448,7 +534,7 @@ SWITCH_STANDARD_API(timer_test_function)
 		timer_name = argv[2];
 	}
 
-	if (mss != 10 && mss != 20 && mss != 30 && mss != 40 && mss != 60 && mss != 120) {
+	if (mss != 10 && mss != 20 && mss != 30 && mss != 32 && mss != 40 && mss != 60 && mss != 120) {
 		stream->write_function(stream, "parameter missing: %s\n", TIMER_TEST_SYNTAX);
 		goto end;
 	}
@@ -1678,6 +1764,7 @@ SWITCH_STANDARD_API(status_function)
 						   duration.sec, duration.sec == 1 ? "" : "s", duration.ms, duration.ms == 1 ? "" : "s", duration.mms,
 						   duration.mms == 1 ? "" : "s");
 
+	stream->write_function(stream, "FreeSWITCH is %s\n", switch_core_ready() ? "ready" : "not ready");
 	stream->write_function(stream, "%" SWITCH_SIZE_T_FMT " session(s) since startup\n", switch_core_session_id() - 1);
 	switch_core_session_ctl(SCSC_LAST_SPS, &last_sps);
 	switch_core_session_ctl(SCSC_SPS, &sps);
@@ -1757,6 +1844,12 @@ SWITCH_STANDARD_API(ctl_function)
 		} else if (!strcasecmp(argv[0], "save_history")) {
 			switch_core_session_ctl(SCSC_SAVE_HISTORY, NULL);
 			stream->write_function(stream, "+OK\n");
+		} else if (!strcasecmp(argv[0], "pause_check")) {
+			switch_core_session_ctl(SCSC_PAUSE_CHECK, &arg);
+			stream->write_function(stream, arg ? "true" : "false");
+		} else if (!strcasecmp(argv[0], "ready_check")) {
+			switch_core_session_ctl(SCSC_READY_CHECK, &arg);
+			stream->write_function(stream, arg ? "true" : "false");
 		} else if (!strcasecmp(argv[0], "shutdown_check")) {
 			switch_core_session_ctl(SCSC_SHUTDOWN_CHECK, &arg);
 			stream->write_function(stream, arg ? "true" : "false");
@@ -2047,6 +2140,34 @@ SWITCH_STANDARD_API(kill_function)
 	return SWITCH_STATUS_SUCCESS;
 }
 
+#define OUTGOING_ANSWER_SYNTAX "<uuid>"
+SWITCH_STANDARD_API(outgoing_answer_function)
+{
+	switch_core_session_t *outgoing_session = NULL;
+	char *mycmd = NULL;
+
+	if (zstr(cmd) || !(mycmd = strdup(cmd))) {
+		stream->write_function(stream, "-USAGE: %s\n", OUTGOING_ANSWER_SYNTAX);
+		return SWITCH_STATUS_SUCCESS;
+	}
+
+	if (zstr(mycmd) || !(outgoing_session = switch_core_session_locate(mycmd))) {
+		stream->write_function(stream, "-ERR No Such Channel!\n");
+	} else {
+		switch_channel_t *channel = switch_core_session_get_channel(outgoing_session);
+		if (switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_OUTBOUND) {
+			switch_channel_mark_answered(channel);
+			stream->write_function(stream, "+OK\n");
+		} else {
+			stream->write_function(stream, "-ERR Not an outbound channel!\n");
+		}
+		switch_core_session_rwunlock(outgoing_session);
+	}
+
+	switch_safe_free(mycmd);
+	return SWITCH_STATUS_SUCCESS;
+}
+
 #define PREPROCESS_SYNTAX "<>"
 SWITCH_STANDARD_API(preprocess_function)
 {
@@ -2196,17 +2317,25 @@ SWITCH_STANDARD_API(dual_transfer_function)
 	dest1 = argv[1];
 	dest2= argv[2];
 
-	if ((dp1 = strchr(dest1, '/'))) {
+	if ((dp1 = strstr(dest1, "/inline")) && *(dp1 + 7) == '\0') {
 		*dp1++ = '\0';
-		if ((context1 = strchr(dp1, '/'))) {
-			*context1++ = '\0';
+	} else {
+		if ((dp1 = strchr(dest1, '/'))) {
+			*dp1++ = '\0';
+			if ((context1 = strchr(dp1, '/'))) {
+				*context1++ = '\0';
+			}
 		}
 	}
 
-	if ((dp2 = strchr(dest2, '/'))) {
+	if ((dp2 = strstr(dest1, "/inline")) && *(dp2 + 7) == '\0') {
 		*dp2++ = '\0';
-		if ((context2 = strchr(dp2, '/'))) {
-			*context2++ = '\0';
+	} else {
+		if ((dp2 = strchr(dest2, '/'))) {
+			*dp2++ = '\0';
+			if ((context2 = strchr(dp2, '/'))) {
+				*context2++ = '\0';
+			}
 		}
 	}
 
@@ -2529,7 +2658,6 @@ SWITCH_STANDARD_API(uuid_broadcast_function)
 {
 	char *mycmd = NULL, *argv[4] = { 0 };
 	int argc = 0;
-	switch_status_t status = SWITCH_STATUS_FALSE;
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
@@ -2563,7 +2691,7 @@ SWITCH_STANDARD_API(uuid_broadcast_function)
 			flags = SMF_ECHO_ALEG | SMF_HOLD_BLEG;
 		}
 
-		status = switch_ivr_broadcast(argv[0], argv[1], flags);
+		switch_ivr_broadcast(argv[0], argv[1], flags);
 		stream->write_function(stream, "+OK Message Sent\n");
 	}
 
@@ -2576,7 +2704,6 @@ SWITCH_STANDARD_API(sched_broadcast_function)
 {
 	char *mycmd = NULL, *argv[4] = { 0 };
 	int argc = 0;
-	switch_status_t status = SWITCH_STATUS_FALSE;
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
@@ -2606,7 +2733,7 @@ SWITCH_STANDARD_API(sched_broadcast_function)
 			flags |= SMF_ECHO_ALEG;
 		}
 
-		status = switch_ivr_schedule_broadcast(when, argv[1], argv[2], flags);
+		switch_ivr_schedule_broadcast(when, argv[1], argv[2], flags);
 		stream->write_function(stream, "+OK Message Scheduled\n");
 	}
 
@@ -2691,8 +2818,6 @@ SWITCH_STANDARD_API(uuid_buglist_function)
 	char *mydata = NULL, *argv[2] = { 0 };
 	int argc = 0;
 
-	switch_status_t status = SWITCH_STATUS_FALSE;
-
 	if (zstr(cmd)) {
 		goto error;
 	}
@@ -2709,7 +2834,7 @@ SWITCH_STANDARD_API(uuid_buglist_function)
 		switch_core_session_t *lsession = NULL;
 
 		if ((lsession = switch_core_session_locate(argv[0]))) {
-			status = switch_core_media_bug_enumerate(lsession, stream);
+			switch_core_media_bug_enumerate(lsession, stream);
 			switch_core_session_rwunlock(lsession);
 		}
 		goto ok;
@@ -3185,8 +3310,7 @@ SWITCH_STANDARD_API(break_function)
 
 	if (both) {
 		const char *quuid = switch_channel_get_variable(channel, SWITCH_SIGNAL_BOND_VARIABLE);
-		if (quuid) {
-			qsession = switch_core_session_locate(quuid);
+		if (quuid && (qsession = switch_core_session_locate(quuid))) {
 			qchannel = switch_core_session_get_channel(qsession);
 		}
 	}
@@ -3782,7 +3906,7 @@ SWITCH_STANDARD_API(alias_function)
 	return SWITCH_STATUS_SUCCESS;
 }
 
-#define SHOW_SYNTAX "codec|endpoint|application|api|dialplan|file|timer|calls [count]|channels [count|like <match string>]|distinct_channels|aliases|complete|chat|management|modules|nat_map|say|interfaces|interface_types|tasks|limits"
+#define SHOW_SYNTAX "codec|endpoint|application|api|dialplan|file|timer|calls [count]|channels [count|like <match string>]|calls|detailed_calls|bridged_calls|detailed_bridged_calls|aliases|complete|chat|management|modules|nat_map|say|interfaces|interface_types|tasks|limits"
 SWITCH_STANDARD_API(show_function)
 {
 	char sql[1024];
@@ -3791,13 +3915,10 @@ SWITCH_STANDARD_API(show_function)
 	struct holder holder = { 0 };
 	int help = 0;
 	char *mydata = NULL, *argv[6] = { 0 };
-	int argc;
 	char *command = NULL, *as = NULL;
 	switch_core_flag_t cflags = switch_core_flags();
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
-	char hostname[256] = "";
-	gethostname(hostname, sizeof(hostname));
-
+    const char *hostname = switch_core_get_switchname();
 
 	if (!(cflags & SCF_USE_SQL)) {
 		stream->write_function(stream, "-ERR SQL DISABLED NO DATA AVAILABLE!\n");
@@ -3812,7 +3933,7 @@ SWITCH_STANDARD_API(show_function)
 	holder.justcount = 0;
 
 	if (cmd && (mydata = strdup(cmd))) {
-		argc = switch_separate_string(mydata, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
+		switch_separate_string(mydata, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
 		command = argv[0];
 		if (argv[2] && !strcasecmp(argv[1], "as")) {
 			as = argv[2];
@@ -3874,7 +3995,7 @@ SWITCH_STANDARD_API(show_function)
 			sprintf(sql, "select name, description, syntax, ikey from interfaces where hostname='%s' and type = '%s' and description != '' order by type,name", hostname, command);
 		}
 	} else if (!strcasecmp(command, "calls")) {
-		sprintf(sql, "select * from calls where hostname='%s' order by call_created_epoch", hostname);
+		sprintf(sql, "select * from basic_calls where hostname='%s' order by call_created_epoch", hostname);
 		if (argv[1] && !strcasecmp(argv[1], "count")) {
 			holder.justcount = 1;
 			if (argv[3] && !strcasecmp(argv[2], "as")) {
@@ -3922,9 +4043,18 @@ SWITCH_STANDARD_API(show_function)
 				as = argv[3];
 			}
 		}
-	} else if (!strcasecmp(command, "distinct_channels")) {
-		sprintf(sql, "select * from channels left join calls on "
-				"channels.uuid=calls.caller_uuid where channels.hostname='%s' and channels.uuid not in (select callee_uuid from calls where hostname='%s') order by created_epoch", hostname, hostname);
+	} else if (!strcasecmp(command, "detailed_calls")) {
+		sprintf(sql, "select * from detailed_calls where hostname='%s' order by created_epoch", hostname);
+		if (argv[2] && !strcasecmp(argv[1], "as")) {
+			as = argv[2];
+		}
+	} else if (!strcasecmp(command, "bridged_calls")) {
+		sprintf(sql, "select * from basic_calls where b_uuid is not null and hostname='%s' order by created_epoch", hostname);
+		if (argv[2] && !strcasecmp(argv[1], "as")) {
+			as = argv[2];
+		}
+	} else if (!strcasecmp(command, "detailed_bridged_calls")) {
+		sprintf(sql, "select * from detailed_calls where b_uuid is not null and hostname='%s' order by created_epoch", hostname);
 		if (argv[2] && !strcasecmp(argv[1], "as")) {
 			as = argv[2];
 		}
@@ -4306,14 +4436,17 @@ SWITCH_STANDARD_API(uuid_fileman_function)
 			char *cmd = argv[1];
 
 			if ((psession = switch_core_session_locate(uuid))) {
-				switch_channel_t *channel;
+				//switch_channel_t *channel;
 				switch_file_handle_t *fh = NULL;
 				
-				channel = switch_core_session_get_channel(psession);
+				//channel = switch_core_session_get_channel(psession);
 				
 				if (switch_ivr_get_file_handle(psession, &fh) == SWITCH_STATUS_SUCCESS) {
 					switch_ivr_process_fh(psession, cmd, fh);
 					switch_ivr_release_file_handle(psession, &fh);
+					stream->write_function(stream, "+OK\n");
+				} else {
+					stream->write_function(stream, "-ERR No File Handle!\n");
 				}
 
 				switch_core_session_rwunlock(psession);
@@ -4617,13 +4750,12 @@ SWITCH_STANDARD_API(strftime_tz_api_function)
 SWITCH_STANDARD_API(hupall_api_function)
 {
 	char *mycmd = NULL, *argv[3] = { 0 };
-	int argc = 0;
 	char *var = NULL;
 	char *val = NULL;
 	switch_call_cause_t cause = SWITCH_CAUSE_MANAGER_REQUEST;
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
-		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
+		switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
 		switch_assert(argv[0]);
 		if ((cause = switch_channel_str2cause(argv[0])) == SWITCH_CAUSE_NONE) {
 			cause = SWITCH_CAUSE_MANAGER_REQUEST;
@@ -4647,6 +4779,30 @@ SWITCH_STANDARD_API(hupall_api_function)
 	} else {
 		stream->write_function(stream, "+OK hangup all channels matching [%s]=[%s] with cause: %s\n", var, val, switch_channel_cause2str(cause));
 	}
+
+	switch_safe_free(mycmd);
+	return SWITCH_STATUS_SUCCESS;
+}
+
+
+SWITCH_STANDARD_API(xml_flush_function)
+{
+	char *mycmd = NULL, *argv[3] = { 0 };
+	int argc = 0;
+	int r = 0;
+
+	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
+		argc = switch_split(mycmd, ' ', argv);
+	}
+
+	if (argc == 3) {
+		r = switch_xml_clear_user_cache(argv[0], argv[1], argv[2]);
+	} else {
+		r = switch_xml_clear_user_cache(NULL, NULL, NULL);
+	}
+
+
+	stream->write_function(stream, "+OK cleared %u entr%s\n", r, r == 1 ? "y" : "ies");
 
 	switch_safe_free(mycmd);
 	return SWITCH_STATUS_SUCCESS;
@@ -4843,6 +4999,87 @@ end:
 	return SWITCH_STATUS_SUCCESS;
 }
 
+#define LIMIT_SYNTAX "<uuid> <backend> <realm> <resource> [<max>[/interval]] [number [dialplan [context]]]"
+SWITCH_STANDARD_API(uuid_limit_function)
+{
+	int argc = 0;
+	char *argv[8] = { 0 };
+	char *mydata = NULL;
+	char *realm = NULL;
+	char *resource = NULL;
+	char *xfer_exten = NULL;
+	int max = -1;
+	int interval = 0;
+	switch_core_session_t *sess = NULL;
+	switch_status_t res = SWITCH_STATUS_SUCCESS;
+
+	if (!zstr(cmd)) {
+		mydata = strdup(cmd);
+		switch_assert(mydata);
+		argc = switch_separate_string(mydata, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
+	}
+	
+	if (argc < 4) {
+		stream->write_function(stream, "USAGE: uuid_limit %s\n", LIMIT_SYNTAX);
+		goto end;
+	}
+
+	realm = argv[2];
+	resource = argv[3];
+
+	/* If max is omitted or negative, only act as a counter and skip maximum checks */
+	if (argc > 4) {
+		if (argv[4][0] == '-') {
+			max = -1;
+		} else {
+			char *szinterval = NULL;
+			if ((szinterval = strchr(argv[4], '/'))) {
+				*szinterval++ = '\0';
+				interval = atoi(szinterval);
+			}
+
+			max = atoi(argv[4]);
+
+			if (max < 0) {
+				max = 0;
+			}
+		}
+	}
+
+	if (argc > 5) {
+		xfer_exten = argv[5];
+	} else {
+		xfer_exten = LIMIT_DEF_XFER_EXTEN;
+	}
+
+	sess = switch_core_session_locate(argv[0]);
+	if (!sess) {
+		stream->write_function(stream, "-ERR did not find a session with uuid %s\n", argv[0]);
+		goto end;
+	}
+
+	res = switch_limit_incr(argv[1], sess, realm, resource, max, interval);
+
+	if (res != SWITCH_STATUS_SUCCESS) {
+		/* Limit exceeded */
+		if (*xfer_exten == '!') {
+			switch_channel_t *channel = switch_core_session_get_channel(sess);
+			switch_channel_hangup(channel, switch_channel_str2cause(xfer_exten + 1));
+		} else {
+			switch_ivr_session_transfer(sess, xfer_exten, argv[6], argv[7]);
+		}
+	}
+
+	switch_core_session_rwunlock(sess);
+
+	stream->write_function(stream, "+OK");
+
+end:
+	switch_safe_free(mydata);
+
+	return SWITCH_STATUS_SUCCESS;
+}
+
 #define LIMIT_RELEASE_SYNTAX "<uuid> <backend> [realm] [resource]"
 SWITCH_STANDARD_API(uuid_limit_release_function)
 {
@@ -5003,6 +5240,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_commands_load)
 	SWITCH_ADD_API(commands_api_interface, "help", "Show help for all the api commands", help_function, "");
 	SWITCH_ADD_API(commands_api_interface, "host_lookup", "host_lookup", host_lookup_function, "<hostname>");
 	SWITCH_ADD_API(commands_api_interface, "hostname", "Returns the system hostname", hostname_api_function, "");
+	SWITCH_ADD_API(commands_api_interface, "switchname", "Returns the switch name", switchname_api_function, "");
 	SWITCH_ADD_API(commands_api_interface, "hupall", "hupall", hupall_api_function, "<cause> [<var> <value>]");
 	SWITCH_ADD_API(commands_api_interface, "in_group", "determine if a user is in a group", in_group_function, "<user>[@<domain>] <group_name>");
 	SWITCH_ADD_API(commands_api_interface, "is_lan_addr", "see if an ip is a lan addr", lan_addr_function, "<ip>");
@@ -5024,6 +5262,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_commands_load)
 	SWITCH_ADD_API(commands_api_interface, "reload", "Reload Module", reload_function, UNLOAD_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "reloadxml", "Reload XML", reload_xml_function, "");
 	SWITCH_ADD_API(commands_api_interface, "replace", "replace a string", replace_function, "<data>|<string1>|<string2>");
+	SWITCH_ADD_API(commands_api_interface, "say_string", "", say_string_function, SAY_STRING_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "sched_api", "Schedule an api command", sched_api_function, SCHED_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "sched_broadcast", "Schedule a broadcast event to a running call", sched_broadcast_function,
 				   SCHED_BROADCAST_SYNTAX);
@@ -5063,6 +5302,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_commands_load)
 	SWITCH_ADD_API(commands_api_interface, "uuid_getvar", "uuid_getvar", uuid_getvar_function, GETVAR_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "uuid_hold", "hold", uuid_hold_function, HOLD_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "uuid_kill", "Kill Channel", kill_function, KILL_SYNTAX);
+	SWITCH_ADD_API(commands_api_interface, "uuid_outgoing_answer", "Answer Outgoing Channel", outgoing_answer_function, OUTGOING_ANSWER_SYNTAX);
+	SWITCH_ADD_API(commands_api_interface, "uuid_limit", "Increase limit resource", uuid_limit_function, LIMIT_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "uuid_limit_release", "Release limit resource", uuid_limit_release_function, LIMIT_RELEASE_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "uuid_loglevel", "set loglevel on session", uuid_loglevel, UUID_LOGLEVEL_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "uuid_media", "media", uuid_media_function, MEDIA_SYNTAX);
@@ -5081,8 +5322,11 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_commands_load)
 	SWITCH_ADD_API(commands_api_interface, "uuid_simplify", "Try to cut out of a call path / attended xfer", uuid_simplify_function, SIMPLIFY_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "uuid_jitterbuffer", "Try to cut out of a call path / attended xfer", 
 				   uuid_jitterbuffer_function, JITTERBUFFER_SYNTAX);
+	SWITCH_ADD_API(commands_api_interface, "xml_flush_cache", "clear xml cache", xml_flush_function, "<id> <key> <val>");
 	SWITCH_ADD_API(commands_api_interface, "xml_locate", "find some xml", xml_locate_function, "[root | <section> <tag> <tag_attr_name> <tag_attr_val>]");
 	SWITCH_ADD_API(commands_api_interface, "xml_wrap", "Wrap another api command in xml", xml_wrap_api_function, "<command> <args>");
+
+
 	switch_console_set_complete("add alias add");
 	switch_console_set_complete("add alias del");
 	switch_console_set_complete("add complete add");
@@ -5111,6 +5355,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_commands_load)
 	switch_console_set_complete("add fsctl crash");
 	switch_console_set_complete("add fsctl verbose_events");
 	switch_console_set_complete("add fsctl save_history");
+	switch_console_set_complete("add fsctl pause_check");
+	switch_console_set_complete("add fsctl ready_check");
 	switch_console_set_complete("add fsctl shutdown_check");
 	switch_console_set_complete("add fsctl shutdown");
 	switch_console_set_complete("add fsctl shutdown asap");
@@ -5181,6 +5427,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_commands_load)
 	switch_console_set_complete("add uuid_hold ::console::list_uuid");
 	switch_console_set_complete("add uuid_jitterbuffer ::console::list_uuid");
 	switch_console_set_complete("add uuid_kill ::console::list_uuid");
+	switch_console_set_complete("add uuid_outgoing_answer ::console::list_uuid");
+	switch_console_set_complete("add uuid_limit ::console::list_uuid");
 	switch_console_set_complete("add uuid_limit_release ::console::list_uuid");
 	switch_console_set_complete("add uuid_loglevel ::console::list_uuid console");
 	switch_console_set_complete("add uuid_loglevel ::console::list_uuid alert");

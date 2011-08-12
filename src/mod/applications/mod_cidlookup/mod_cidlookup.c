@@ -366,7 +366,6 @@ static long do_lookup_url(switch_memory_pool_t *pool, switch_event_t *event, cha
 	switch_time_t time_diff = 0;
 	CURL *curl_handle = NULL;
 	long httpRes = 0;
-	char hostname[256] = "";
 
 	struct http_data http_data;
 
@@ -374,8 +373,6 @@ static long do_lookup_url(switch_memory_pool_t *pool, switch_event_t *event, cha
 
 	http_data.max_bytes = 10240;
 	SWITCH_STANDARD_STREAM(http_data.stream);
-
-	gethostname(hostname, sizeof(hostname));
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG10, "url: %s\n", query);
 	curl_handle = curl_easy_init();
@@ -557,6 +554,7 @@ static cid_data_t *do_lookup(switch_memory_pool_t *pool, switch_event_t *event, 
 	char *name = NULL;
 	char *url_query = NULL;
 	cid_data_t *cid = NULL;
+	cid_data_t *cidtmp = NULL;
 	switch_bool_t save_cache = SWITCH_FALSE;
 
 	cid = switch_core_alloc(pool, sizeof(cid_data_t));
@@ -576,8 +574,9 @@ static cid_data_t *do_lookup(switch_memory_pool_t *pool, switch_event_t *event, 
 	}
 
 	if (globals.cache) {
-		cid = check_cache(pool, number);
-		if (cid) {
+		cidtmp = check_cache(pool, number);
+		if (cidtmp) {
+			cid = cidtmp;
 			cid->src = switch_core_sprintf(pool, "%s (cache)", cid->src);
 			goto done;
 		}
@@ -728,6 +727,9 @@ SWITCH_STANDARD_APP(cidlookup_app_function)
 	}
 	if (!session && pool) {
 		switch_core_destroy_memory_pool(&pool);
+	}
+	/* This is so compile doesn't failed because status is never used */
+	if (status) {
 	}
 }
 

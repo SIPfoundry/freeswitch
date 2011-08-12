@@ -67,6 +67,10 @@ SWITCH_BEGIN_EXTERN_C
 	char *name;
 	/*! the header value */
 	char *value;
+	/*! array space */
+	char **array;
+	/*! array index */
+	int idx;
 	/*! hash of the header name */
 	unsigned long hash;
 	struct switch_event_header *next;
@@ -146,7 +150,10 @@ SWITCH_DECLARE(switch_status_t) switch_event_set_priority(switch_event_t *event,
   \param header_name the name of the header to read
   \return the value of the requested header
 */
-	 _Ret_opt_z_ SWITCH_DECLARE(char *) switch_event_get_header(switch_event_t *event, const char *header_name);
+
+SWITCH_DECLARE(switch_event_header_t *) switch_event_get_header_ptr(switch_event_t *event, const char *header_name);
+_Ret_opt_z_ SWITCH_DECLARE(char *) switch_event_get_header_idx(switch_event_t *event, const char *header_name, int idx);
+#define switch_event_get_header(_e, _h) switch_event_get_header_idx(_e, _h, -1)
 
 #define switch_event_get_header_nil(e, h) switch_str_nil(switch_event_get_header(e,h))
 
@@ -184,7 +191,7 @@ SWITCH_DECLARE(switch_status_t) switch_event_add_header_string(switch_event_t *e
 
 SWITCH_DECLARE(switch_status_t) switch_event_del_header_val(switch_event_t *event, const char *header_name, const char *val);
 #define switch_event_del_header(_e, _h) switch_event_del_header_val(_e, _h, NULL)
-
+SWITCH_DECLARE(int) switch_event_add_array(switch_event_t *event, const char *var, const char *val);
 /*!
   \brief Destroy an event
   \param event pointer to the pointer to event to destroy
@@ -285,7 +292,7 @@ SWITCH_DECLARE(switch_status_t) switch_event_free_subclass_detailed(const char *
 SWITCH_DECLARE(switch_status_t) switch_event_serialize(switch_event_t *event, char **str, switch_bool_t encode);
 SWITCH_DECLARE(switch_status_t) switch_event_serialize_json(switch_event_t *event, char **str);
 SWITCH_DECLARE(switch_status_t) switch_event_create_json(switch_event_t **event, const char *json);
-SWITCH_DECLARE(switch_status_t) switch_event_create_brackets(char *data, char a, char b, char c, switch_event_t **event, char **new_data);
+SWITCH_DECLARE(switch_status_t) switch_event_create_brackets(char *data, char a, char b, char c, switch_event_t **event, char **new_data, switch_bool_t dup);
 
 #ifndef SWIG
 /*!

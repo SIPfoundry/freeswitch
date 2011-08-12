@@ -2307,7 +2307,7 @@ int agent_init_via(nta_agent_t *self, tport_t *primaries, int use_maddr)
 
   /* Set via fields for the tports */
   for (tp = primaries; tp; tp = tport_next(tp)) {
-    int maddr, first_via;
+    int maddr;
     tp_name_t tpn[1];
     char const *comp = NULL;
 
@@ -2338,8 +2338,6 @@ int agent_init_via(nta_agent_t *self, tport_t *primaries, int use_maddr)
       self->sa_tport_sctp = 1;
 
     if (tport_has_tls(tp)) self->sa_tport_tls = 1;
-
-    first_via = 1;
 
     ai = tport_get_address(tp);
 
@@ -7781,7 +7779,7 @@ nta_outgoing_t *outgoing_create(nta_agent_t *agent,
   if (tpn) {
     /* CANCEL or ACK to [3456]XX */
     invalid = tport_name_dup(home, orq->orq_tpn, tpn);
-#if HAVE_SOFIA_SRESOLV
+#if 0 //HAVE_SOFIA_SRESOLV
     /* We send ACK or CANCEL only if original request was really sent */
     assert(tport_name_is_resolved(orq->orq_tpn));
 #endif
@@ -8665,10 +8663,6 @@ void outgoing_destroy(nta_outgoing_t *orq)
   orq->orq_destroyed = 1;
   orq->orq_callback = outgoing_default_cb;
   orq->orq_magic = NULL;
-
-  if (orq->orq_method != sip_method_invite &&
-      orq->orq_method != sip_method_ack)
-    outgoing_terminate(orq);
 }
 
 /** @internal Outgoing transaction timer routine.

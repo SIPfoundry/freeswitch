@@ -127,12 +127,14 @@ struct callback_obj {
 	int matches;
 	switch_memory_pool_t *pool;
 	char *lookup_number;
+	char *lrn_number;
 	char *cid;
 	switch_bool_t intrastate;
 	switch_bool_t intralata;
 	profile_t *profile;
 	switch_core_session_t *session;
 	switch_event_t *event;
+	float max_rate;
 };
 typedef struct callback_obj callback_t;
 
@@ -152,6 +154,14 @@ static struct {
 SWITCH_MODULE_LOAD_FUNCTION(mod_lcr_load);
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_lcr_shutdown);
 SWITCH_MODULE_DEFINITION(mod_lcr, mod_lcr_load, mod_lcr_shutdown, NULL);
+
+static void lcr_destroy(lcr_route route)
+{
+	while(route) {
+		switch_event_destroy(&route->fields);
+		route=route->next;
+	}
+}
 
 static const char *do_cid(switch_memory_pool_t *pool, const char *cid, const char *number, switch_core_session_t *session)
 {
@@ -239,14 +249,13 @@ static char *get_bridge_data(switch_memory_pool_t *pool, char *dialed_number, ch
 	size_t  tstrip;
 	char *data = NULL;
 	char *destination_number = NULL;
-	char *orig_destination_number = NULL; 
 	char *codec = NULL;
 	char *cid = NULL;
 	char *header = NULL;
 	char *user_rate = NULL;
 	char *export_fields = NULL;
 
-	orig_destination_number = destination_number = switch_core_strdup(pool, dialed_number);
+	destination_number = switch_core_strdup(pool, dialed_number);
 	
 	tstrip = ((cur_route->digit_len - cur_route->tstrip) + 1);
 	lstrip = cur_route->lstrip;
@@ -595,11 +604,12 @@ static int route_add_callback(void *pArg, int argc, char **argv, char **columnNa
 	callback_t *cbt = (callback_t *) pArg;
 	char *key = NULL;
 	int i = 0;
+	int r = 0;
 
 	switch_memory_pool_t *pool = cbt->pool;
 	
 	additional = switch_core_alloc(pool, sizeof(lcr_obj_t));
-	additional->fields = switch_core_alloc(pool, sizeof(switch_event_t));
+	switch_event_create(&additional->fields, SWITCH_EVENT_REQUEST_PARAMS);
 
 	for (i = 0; i < argc ; i++) {
 		if (CF("lcr_digits")) {
@@ -612,6 +622,11 @@ static int route_add_callback(void *pArg, int argc, char **argv, char **columnNa
 		} else if (CF("lcr_carrier_name")) {
 			additional->carrier_name = switch_core_strdup(pool, switch_str_nil(argv[i]));
 		} else if (CF("lcr_rate_field")) {
+			if (!argv[i] || zstr(argv[i])) {
+				/* maybe we want to consider saying which carriers have null rate fields... maybe they can run the query and find out */
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "rate field is null, skipping\n");
+				goto end;
+			}
 			additional->rate = (float)atof(switch_str_nil(argv[i]));
 			additional->rate_str = switch_core_sprintf(pool, "%0.5f", additional->rate);
 		} else if (CF("lcr_gw_prefix")) {
@@ -652,14 +667,19 @@ static int route_add_callback(void *pArg, int argc, char **argv, char **columnNa
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding %s to head of list\n", additional->carrier_name);
 		if (switch_core_hash_insert(cbt->dedup_hash, key, additional) != SWITCH_STATUS_SUCCESS) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error inserting into dedup hash\n");
-			return SWITCH_STATUS_GENERR;
+			r = -1; goto end;
 		}
-		return SWITCH_STATUS_SUCCESS;
+		r = 0; goto end;
 	}
 
-	
+
 	for (current = cbt->head; current; current = current->next) {
-	
+		if (cbt->max_rate && (cbt->max_rate < additional->rate)) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Skipping [%s] because [%f] is higher than the max_rate of [%f]\n", 
+							  additional->carrier_name, additional->rate, cbt->max_rate);
+			break;
+		}
+		
 		key = switch_core_sprintf(pool, "%s:%s", additional->gw_prefix, additional->gw_suffix);
 		if (switch_core_hash_find(cbt->dedup_hash, key)) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
@@ -676,7 +696,7 @@ static int route_add_callback(void *pArg, int argc, char **argv, char **columnNa
 				additional->prev = current;
 				if (switch_core_hash_insert(cbt->dedup_hash, key, additional) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error inserting into dedup hash\n");
-					return SWITCH_STATUS_GENERR;
+					r = -1; goto end;
 				}
 				break;
 			}
@@ -697,7 +717,7 @@ static int route_add_callback(void *pArg, int argc, char **argv, char **columnNa
 				current->prev = additional;
 				if (switch_core_hash_insert(cbt->dedup_hash, key, additional) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error inserting into dedup hash\n");
-					return SWITCH_STATUS_GENERR;
+					r = -1; goto end;
 				}
 				break;
 			} else if (current->next == NULL) {
@@ -707,13 +727,19 @@ static int route_add_callback(void *pArg, int argc, char **argv, char **columnNa
 				additional->prev = current;
 				if (switch_core_hash_insert(cbt->dedup_hash, key, additional) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error inserting into dedup hash\n");
-					return SWITCH_STATUS_GENERR;
+					r = -1; goto end;
 				}
 				break;
 			}
 		}
 	}
-	return SWITCH_STATUS_SUCCESS;
+
+ end:
+
+	/* event is freed in lcr_destroy() switch_event_destroy(&additional->fields); */
+
+	return r;
+
 }
 
 static int intrastatelata_callback(void *pArg, int argc, char **argv, char **columnNames)
@@ -745,10 +771,14 @@ static switch_status_t is_intrastatelata(callback_t *cb_struct)
 	 */
 	if (!cb_struct->lookup_number || strlen(cb_struct->lookup_number) != 11 || *cb_struct->lookup_number != '1' || 
 		!switch_is_number(cb_struct->lookup_number)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(cb_struct->session), SWITCH_LOG_DEBUG, 
+						  "%s doesn't appear to be a NANP number\n", cb_struct->lookup_number);
 		/* dest doesn't appear to be NANP number */
 		return SWITCH_STATUS_GENERR;
 	}
 	if (!cb_struct->cid || strlen(cb_struct->cid) != 11 || *cb_struct->cid != '1' || !switch_is_number(cb_struct->cid)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(cb_struct->session), SWITCH_LOG_DEBUG, 
+						  "%s doesn't appear to be a NANP number\n", cb_struct->cid);
 		/* cid not NANP */
 		return SWITCH_STATUS_GENERR;
 	}
@@ -771,7 +801,7 @@ static switch_status_t is_intrastatelata(callback_t *cb_struct)
 								cb_struct->lookup_number+1, cb_struct->lookup_number+4,
 								cb_struct->cid+1, cb_struct->cid+4);
 
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(cb_struct->session), SWITCH_LOG_DEBUG, "SQL: %s\n", sql);    
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(cb_struct->session), SWITCH_LOG_DEBUG, "SQL: %s\n", sql);
 
 	return(lcr_execute_sql_callback(sql, intrastatelata_callback, cb_struct));
 	
@@ -781,8 +811,9 @@ static switch_status_t lcr_do_lookup(callback_t *cb_struct)
 {
 	switch_stream_handle_t sql_stream = { 0 };
 	char *digits = cb_struct->lookup_number;
-	char *digits_copy;
-	char *digits_expanded;
+	char *digits_copy = NULL;
+	char *digits_expanded = NULL;
+	char *lrn_digits_expanded = NULL;
 	profile_t *profile = cb_struct->profile;
 	switch_bool_t lookup_status;
 	switch_channel_t *channel;
@@ -805,7 +836,13 @@ static switch_status_t lcr_do_lookup(callback_t *cb_struct)
 	}
 	
 	digits_expanded = expand_digits(cb_struct->pool, digits_copy, cb_struct->profile->quote_in_list);
+	if (cb_struct->lrn_number) {
+		lrn_digits_expanded = expand_digits(cb_struct->pool, cb_struct->lrn_number, cb_struct->profile->quote_in_list);
+	} else {
+		lrn_digits_expanded = switch_core_strdup(cb_struct->pool, digits_expanded);
+	}
 	
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(cb_struct->session), SWITCH_LOG_DEBUG, "Has NPA NXX: [%u == %u]\n", profile->profile_has_npanxx, SWITCH_TRUE);
 	if (profile->profile_has_npanxx == SWITCH_TRUE) {
 		is_intrastatelata(cb_struct);
 	}
@@ -828,12 +865,20 @@ static switch_status_t lcr_do_lookup(callback_t *cb_struct)
 	if (cb_struct->session) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(cb_struct->session), SWITCH_LOG_DEBUG, "we have a session\n");
 		if ((channel = switch_core_session_get_channel(cb_struct->session))) {
+			const char *max_rate = switch_channel_get_variable(channel, "max_rate");
+			if (!zstr(max_rate)) {
+				cb_struct->max_rate = atof(max_rate);
+			}
 			switch_channel_set_variable_var_check(channel, "lcr_rate_field", rate_field, SWITCH_FALSE);
 			switch_channel_set_variable_var_check(channel, "lcr_user_rate_field", user_rate_field, SWITCH_FALSE);
 			switch_channel_set_variable_var_check(channel, "lcr_query_digits", digits_copy, SWITCH_FALSE);
 			id_str = switch_core_sprintf(cb_struct->pool, "%d", cb_struct->profile->id);
 			switch_channel_set_variable_var_check(channel, "lcr_query_profile", id_str, SWITCH_FALSE);
 			switch_channel_set_variable_var_check(channel, "lcr_query_expanded_digits", digits_expanded, SWITCH_FALSE);
+			switch_channel_set_variable_var_check(channel, "lcr_query_expanded_lrn_digits", lrn_digits_expanded, SWITCH_FALSE);
+			if ( cb_struct->lrn_number ) {
+				switch_channel_set_variable_var_check(channel, "lcr_lrn", cb_struct->lrn_number, SWITCH_FALSE);
+			}
 		}
 	}
 	if (cb_struct->event) {
@@ -844,6 +889,10 @@ static switch_status_t lcr_do_lookup(callback_t *cb_struct)
 		id_str = switch_core_sprintf(cb_struct->pool, "%d", cb_struct->profile->id);
 		switch_event_add_header_string(cb_struct->event, SWITCH_STACK_BOTTOM, "lcr_query_profile", id_str);
 		switch_event_add_header_string(cb_struct->event, SWITCH_STACK_BOTTOM, "lcr_query_expanded_digits", digits_expanded);
+		switch_event_add_header_string(cb_struct->event, SWITCH_STACK_BOTTOM, "lcr_query_expanded_lrn_digits", lrn_digits_expanded);
+		if ( cb_struct->lrn_number ) {
+			switch_event_add_header_string(cb_struct->event, SWITCH_STACK_BOTTOM, "lcr_lrn", cb_struct->lrn_number);
+		}
 	}
 
 	/* set up the query to be executed */
@@ -893,6 +942,7 @@ static switch_bool_t test_profile(char *lcr_profile)
 	
 	routes.lookup_number = "15555551212";
 	routes.cid = "18005551212";
+	lcr_destroy(routes.head);
 	return (lcr_do_lookup(&routes) == SWITCH_STATUS_SUCCESS) ?
 	        SWITCH_TRUE : SWITCH_FALSE;
 }
@@ -965,7 +1015,7 @@ static switch_status_t lcr_load_config()
 			char *export_fields = NULL;
 			char *limit_type = NULL;
 			int argc, x = 0;
-			char *argv[4] = { 0 };
+			char *argv[32] = { 0 };
 			
 			SWITCH_STANDARD_STREAM(order_by);
 
@@ -1045,27 +1095,53 @@ static switch_status_t lcr_load_config()
 				SWITCH_STANDARD_STREAM(sql_stream);
 				if (zstr(custom_sql)) {
 					/* use default sql */
-					sql_stream.write_function(&sql_stream, 
-											  "SELECT l.digits AS lcr_digits, c.carrier_name AS lcr_carrier_name, l.${lcr_rate_field} AS lcr_rate_field, cg.prefix AS lcr_gw_prefix, cg.suffix AS lcr_gw_suffix, l.lead_strip AS lcr_lead_strip, l.trail_strip AS lcr_trail_strip, l.prefix AS lcr_prefix, l.suffix AS lcr_suffix "
-											  );
-					if (db_check("SELECT codec from carrier_gateway limit 1") == SWITCH_TRUE) {
-						sql_stream.write_function(&sql_stream, ", cg.codec AS lcr_codec ");
+
+					/* Checking for codec field, adding if needed */
+					if (db_check("SELECT codec FROM carrier_gateway LIMIT 1") == SWITCH_TRUE) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "codec field defined.\n");
 					} else {
-						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "codec field not defined, please update your lcr carrier_gateway database schema.\n");
+						if (db_check("ALTER TABLE carrier_gateway add codec varchar(255);") == SWITCH_TRUE) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "adding codec field your lcr carrier_gateway database schema.\n");
+						} else {
+							return SWITCH_FALSE;
+						}
 					}
-					if (db_check("SELECT cid from lcr limit 1") == SWITCH_TRUE) {
-						sql_stream.write_function(&sql_stream, ", l.cid AS lcr_cid ");
+
+					/* Checking for cid field, adding if needed */
+					if (db_check("SELECT cid FROM lcr LIMIT 1") == SWITCH_TRUE) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cid field defined.\n");
 					} else {
-						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "cid field not defined, please update your lcr database schema.\n");
+						if (db_check("ALTER TABLE lcr add cid varchar(32);") == SWITCH_TRUE) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "adding cid field to your lcr database schema.\n");
+						} else {
+							return SWITCH_FALSE;
+						}
 					}
-					sql_stream.write_function(&sql_stream, "FROM lcr l JOIN carriers c ON l.carrier_id=c.id JOIN carrier_gateway cg ON c.id=cg.carrier_id WHERE c.enabled = '1' AND cg.enabled = '1' AND l.enabled = '1' AND digits IN (");
-					sql_stream.write_function(&sql_stream, "${lcr_query_expanded_digits}");
+
+					if (db_check("SELECT lrn FROM lcr LIMIT 1") != SWITCH_TRUE) {
+						if (db_check("ALTER TABLE lcr add lrn boolean")) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "adding cid field to your lcr database schema.\n");
+						} else {
+							return SWITCH_FALSE;
+						}
+					}
+
+					sql_stream.write_function(&sql_stream, 
+											  "SELECT l.digits AS lcr_digits, c.carrier_name AS lcr_carrier_name, l.${lcr_rate_field} AS lcr_rate_field, \
+                                                      cg.prefix AS lcr_gw_prefix, cg.suffix AS lcr_gw_suffix, l.lead_strip AS lcr_lead_strip, \
+                                                      l.trail_strip AS lcr_trail_strip, l.prefix AS lcr_prefix, l.suffix AS lcr_suffix, \
+                                                      cg.codec AS lcr_codec, l.cid AS lcr_cid ");
+					sql_stream.write_function(&sql_stream, "FROM lcr l JOIN carriers c ON l.carrier_id=c.id \
+                                                            JOIN carrier_gateway cg ON c.id=cg.carrier_id \
+                                                            WHERE c.enabled = '1' AND cg.enabled = '1' AND l.enabled = '1' AND (\
+                                                             (digits IN (${lcr_query_expanded_digits})     AND lrn = false) OR	\
+                                                             (digits IN (${lcr_query_expanded_lrn_digits}) AND lrn = true)");
+
 					sql_stream.write_function(&sql_stream, ") AND CURRENT_TIMESTAMP BETWEEN date_start AND date_end ");
 					if (profile->id > 0) {
 						sql_stream.write_function(&sql_stream, "AND lcr_profile=%d ", profile->id);
 					}
+
 					sql_stream.write_function(&sql_stream, "ORDER BY digits DESC%s", 
 															profile->order_by);
 					if (db_random) {
@@ -1222,7 +1298,6 @@ static switch_call_cause_t lcr_outgoing_channel(switch_core_session_t *session,
 	const char *intralata = NULL;
 	switch_core_session_t *mysession = NULL;
 	switch_channel_t *channel = NULL;
-	switch_caller_profile_t *caller_profile = NULL;
 	
 	dest = strdup(outbound_profile->destination_number);
 	
@@ -1249,7 +1324,6 @@ static switch_call_cause_t lcr_outgoing_channel(switch_core_session_t *session,
 			timelimit = atoi(var);
 		}
 		routes.session = session;
-		caller_profile = switch_channel_get_caller_profile(channel);
 		intrastate = switch_channel_get_variable(channel, "intrastate");
 		intralata = switch_channel_get_variable(channel, "intralata");
 		cid_name_override = switch_channel_get_variable(channel, "origination_caller_id_name");
@@ -1371,6 +1445,7 @@ static switch_call_cause_t lcr_outgoing_channel(switch_core_session_t *session,
 	if (mysession) {
 		switch_core_session_rwunlock(mysession);
 	}
+	lcr_destroy(routes.head);
 	switch_core_destroy_memory_pool(&pool);
 	switch_safe_free(dest);
 
@@ -1391,6 +1466,7 @@ SWITCH_STANDARD_DIALPLAN(lcr_dialplan_hunt)
 	switch_event_t *event = NULL;
 	const char *intrastate = NULL;
 	const char *intralata = NULL;
+	const char *lrn = NULL;
 
 	if (session) {
 		pool = switch_core_session_get_pool(session);
@@ -1404,8 +1480,12 @@ SWITCH_STANDARD_DIALPLAN(lcr_dialplan_hunt)
 
 	intrastate = switch_channel_get_variable(channel, "intrastate");
 	intralata = switch_channel_get_variable(channel, "intralata");
+	lrn = switch_channel_get_variable(channel, "lrn");
+	routes.lrn_number = (char *) lrn;
+
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "intrastate channel var is [%s]\n", intrastate);
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "intralata channel var is [%s]\n", intralata);
+
 	if (!zstr(intralata) && !strcasecmp((char *)intralata, "true")) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Select routes based on intralata rates\n");
 		routes.intralata = SWITCH_FALSE;
@@ -1468,6 +1548,7 @@ SWITCH_STANDARD_DIALPLAN(lcr_dialplan_hunt)
 	}
 
 end:
+	lcr_destroy(routes.head);
 	if (event) {
 		switch_event_destroy(&event);
 	}
@@ -1491,7 +1572,7 @@ void str_repeat(size_t how_many, char *what, switch_stream_handle_t *str_stream)
 SWITCH_STANDARD_APP(lcr_app_function)
 {
 	int argc = 0;
-	char *argv[4] = { 0 };
+	char *argv[32] = { 0 };
 	char *mydata = NULL;
 	char *dest = NULL;
 	char vbuf[1024] = "";
@@ -1504,6 +1585,7 @@ SWITCH_STANDARD_APP(lcr_app_function)
 	switch_memory_pool_t *pool;
 	switch_event_t *event;
 	const char *intra = NULL;
+	const char *lrn = NULL;
 
 	if (!(mydata = switch_core_session_strdup(session, data))) {
 		return;
@@ -1517,11 +1599,15 @@ SWITCH_STANDARD_APP(lcr_app_function)
 		switch_event_create(&event, SWITCH_EVENT_MESSAGE);
 		routes.event = event;
 	}
+
 	routes.pool = pool;
 
+
+	lrn = switch_channel_get_variable(channel, "lrn");
+	routes.lrn_number = (char *) lrn;
+
 	intra = switch_channel_get_variable(channel, "intrastate");
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "intrastate channel var is [%s]\n", 
-					zstr(intra) ? "undef" : intra);
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "intrastate channel var is [%s]\n", zstr(intra) ? "undef" : intra);
 	if (zstr(intra) || strcasecmp((char *)intra, "true")) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Select routes based on interstate rates\n");
 		routes.intrastate = SWITCH_FALSE;
@@ -1538,6 +1624,7 @@ SWITCH_STANDARD_APP(lcr_app_function)
 
 	if ((argc = switch_separate_string(mydata, ' ', argv, (sizeof(argv) / sizeof(argv[0]))))) {
 		dest = argv[0];
+		
 		if (argc > 1) {
 			lcr_profile = argv[1];
 		}
@@ -1600,6 +1687,7 @@ SWITCH_STANDARD_APP(lcr_app_function)
 	}
 	
 end:
+	lcr_destroy(routes.head);
 	if (routes.event) {
 		switch_event_destroy(&event);
 	}
@@ -1623,21 +1711,20 @@ static void write_data(switch_stream_handle_t *stream, switch_bool_t as_xml, con
 
 SWITCH_STANDARD_API(dialplan_lcr_function)
 {
-	char *argv[4] = { 0 };
+	char *argv[32]                 = { 0 };
 	int argc;
-	char *mydata = NULL;
-	char *dialstring = NULL;
-	char *lcr_profile = NULL;
-	lcr_route current = NULL;
-	max_obj_t maximum_lengths = { 0 };
-	callback_t cb_struct = { 0 };
-	switch_memory_pool_t *pool = NULL;
+	char *mydata                  = NULL;
+	char *lcr_profile             = NULL;
+	lcr_route current             = NULL;
+	max_obj_t maximum_lengths     = { 0 };
+	callback_t cb_struct          = { 0 };
+	switch_memory_pool_t *pool    = NULL;
 	switch_event_t *event;
 	switch_status_t lookup_status = SWITCH_STATUS_SUCCESS;
-	switch_bool_t as_xml = SWITCH_FALSE;
-	char *event_str = NULL;
-	switch_xml_t event_xml = NULL;
-	int rowcount=0;
+	switch_bool_t as_xml          = SWITCH_FALSE;
+	char *event_str               = NULL;
+	switch_xml_t event_xml        = NULL;
+	int rowcount                  = 0;
 
 	if (zstr(cmd)) {
 		goto usage;
@@ -1667,10 +1754,18 @@ SWITCH_STANDARD_API(dialplan_lcr_function)
 		}
 		if (argc > 2) {
 			int i;
-			for (i=2; i<argc; i++) {
+			for (i = 2; i < argc; i++) {
 				if (!strcasecmp(argv[i], "intrastate")) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Select routes based on intrastate rates\n");
 					cb_struct.intrastate = SWITCH_TRUE;
+				} else if (!strcasecmp(argv[i], "lrn")) {
+					i++;
+					if (argv[i]) {
+						cb_struct.lrn_number = argv[i];
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "LRN number [%s]\n", cb_struct.lrn_number);
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "you must pass a LRN number to use lrn\n");
+					}
 				} else if (!strcasecmp(argv[i], "as")) {
 					i++;
 					if (argv[i] && !strcasecmp(argv[i], "xml")) {
@@ -1748,7 +1843,8 @@ SWITCH_STANDARD_API(dialplan_lcr_function)
 			current = cb_struct.head;
 			while (current) {
 
-				dialstring = get_bridge_data(pool, cb_struct.lookup_number, cb_struct.cid, current, cb_struct.profile, cb_struct.session);
+				//dialstring = 
+				get_bridge_data(pool, cb_struct.lookup_number, cb_struct.cid, current, cb_struct.profile, cb_struct.session);
 				rowcount++;
 
 				if (as_xml) {
@@ -1783,7 +1879,7 @@ SWITCH_STANDARD_API(dialplan_lcr_function)
 				if (as_xml) {
 					event_xml = switch_event_xmlize(current->fields, SWITCH_VA_NONE);
 					event_str = switch_xml_toxml(event_xml, SWITCH_FALSE);
-					stream->write_function(stream, event_str);
+					stream->write_function(stream, "%s", event_str);
 					switch_xml_free(event_xml);
 					switch_safe_free(event_str);
 				}
@@ -1812,6 +1908,7 @@ SWITCH_STANDARD_API(dialplan_lcr_function)
 	}
 
 end:
+	lcr_destroy(cb_struct.head);
 	if (!session) {
 		if (pool) {
 			switch_core_destroy_memory_pool(&pool);
@@ -1825,7 +1922,7 @@ usage:
 
 SWITCH_STANDARD_API(dialplan_lcr_admin_function)
 {
-	char *argv[4] = { 0 };
+	char *argv[32] = { 0 };
 	int argc;
 	char *mydata = NULL;
 	switch_hash_index_t *hi;
@@ -1860,16 +1957,11 @@ SWITCH_STANDARD_API(dialplan_lcr_admin_function)
 				stream->write_function(stream, " has intrastate:\t%s\n", profile->profile_has_intrastate ? "true" : "false");
 				stream->write_function(stream, " has intralata:\t%s\n", profile->profile_has_intralata ? "true" : "false");
 				stream->write_function(stream, " has npanxx:\t%s\n", profile->profile_has_npanxx ? "true" : "false");
-				stream->write_function(stream, " Reorder rate:\t%s\n", 
-										profile->reorder_by_rate ? "enabled" : "disabled");
-				stream->write_function(stream, " Info in headers:\t%s\n", 
-										profile->info_in_headers ? "enabled" : "disabled");
-				stream->write_function(stream, " Quote IN() List:\t%s\n", 
-										profile->quote_in_list ? "enabled" : "disabled");
-				stream->write_function(stream, " Sip Redirection Mode:\t%s\n", 
-										profile->enable_sip_redir ? "enabled" : "disabled");
-				stream->write_function(stream, " Import fields:\t%s\n", 
-					profile->export_fields_str ? profile->export_fields_str : "(null)");
+				stream->write_function(stream, " Reorder rate:\t%s\n", profile->reorder_by_rate ? "enabled" : "disabled");
+				stream->write_function(stream, " Info in headers:\t%s\n", profile->info_in_headers ? "enabled" : "disabled");
+				stream->write_function(stream, " Quote IN() List:\t%s\n", profile->quote_in_list ? "enabled" : "disabled");
+				stream->write_function(stream, " Sip Redirection Mode:\t%s\n", profile->enable_sip_redir ? "enabled" : "disabled");
+				stream->write_function(stream, " Import fields:\t%s\n", profile->export_fields_str ? profile->export_fields_str : "(null)");
 				stream->write_function(stream, " Limit type:\t%s\n", profile->limit_type);
 				stream->write_function(stream, "\n");
 			}

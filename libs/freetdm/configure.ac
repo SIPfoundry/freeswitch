@@ -65,6 +65,18 @@ AC_ARG_WITH([modinstdir],
 )
 AC_SUBST([modinstdir])
 
+# freetdm.pc pkgconfig file
+AC_ARG_WITH([pkgconfigdir],
+	[AS_HELP_STRING([--with-pkgconfigdir=DIR], [Installation directory for pkgconfig file (default: ${libdir}/pkgconfig)])],
+	[case "${withval}" in
+	 yes|no) AC_MSG_ERROR([Invalid value ${withval} for option --with-pkgconfigdir]) ;;
+	 *) pkgconfigdir="${withval}" ;;
+	 esac
+	],
+	[pkgconfigdir="${libdir}/pkgconfig"]
+)
+AC_SUBST([pkgconfigdir])
+
 AC_ARG_ENABLE([enable_64],
 	[AS_HELP_STRING([--enable-64], [Enable 64bit compilation])],
 	[enable_64="${enableval}"],
@@ -121,8 +133,7 @@ AC_CHECK_LIB([dl], [dlopen])
 AC_CHECK_LIB([pthread], [pthread_create])
 AC_CHECK_LIB([m], [cos])
 
-AC_CHECK_HEADERS([netinet/sctp.h netdb.h sys/select.h])
-AM_CONDITIONAL([HAVE_SCTP],[test "${ac_cv_header_netinet_sctp_h}" = "yes"])
+AC_CHECK_HEADERS([netdb.h sys/select.h])
 
 AC_CHECK_FUNC([gethostbyname_r],
 	[], [AC_CHECK_LIB([nsl], [gethostbyname_r])]
@@ -281,6 +292,19 @@ if test "${HAVE_SNG_SS7}" = "yes"; then
 			;;
 		esac
 	fi
+fi
+
+
+##
+# zlib (required for Sangoma SS7 Transparent IAM)
+#
+HAVE_ZLIB="no"
+AC_MSG_RESULT([${as_nl}<<>> zlib])
+AC_CHECK_LIB([z], [compress], [HAVE_ZLIB="yes"])
+AC_MSG_RESULT([checking whether zlib is installed... ${HAVE_ZLIB}])
+AM_CONDITIONAL([HAVE_ZLIB], [test "{HAVE_ZLIB]" = "yes"])
+if test "${HAVE_ZLIB}" = "yes"; then
+	CFLAGS="$CFLAGS -DHAVE_ZLIB"
 fi
 
 ##

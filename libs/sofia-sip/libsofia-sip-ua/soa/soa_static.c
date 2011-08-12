@@ -1010,7 +1010,6 @@ int soa_sdp_mode_set(sdp_session_t const *user,
   int retval = 0, i, j;
   int hold_all;
   int inactive_all;
-  int inactive = 0;
   char const *hold_media = NULL;
   sdp_mode_t send_mode, recv_mode;
 
@@ -1029,20 +1028,21 @@ int soa_sdp_mode_set(sdp_session_t const *user,
 
   for (sm = session->sdp_media; sm; sm = sm->m_next, rm = rm_next, i++) {
     rm_next = rm ? rm->m_next : NULL;
-    inactive = 0;
 
     if (sm->m_rejected)
       continue;
 
     assert(s2u);
 
-    for (j = 0, um = user->sdp_media; j != s2u[i]; um = um->m_next, j++)
-      assert(um);
+    for (j = 0, um = user->sdp_media; j != s2u[i]; um = um->m_next, j++) {
+		if (!um) break;
+	}
+
     if (um == NULL) {
       if (dryrun)
-	return 1;
+		  return 1;
       else
-	retval = 1;
+		  retval = 1;
       sm->m_rejected = 1;
       sm->m_mode = sdp_inactive;
       sm->m_port = 0;

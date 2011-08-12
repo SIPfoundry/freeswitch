@@ -36,6 +36,7 @@
 
 
 #include <switch.h>
+#include <switch_ssl.h>
 #include <switch_stun.h>
 #include <switch_nat.h>
 #include <switch_version.h>
@@ -80,6 +81,7 @@ static void send_heartbeat(void)
 								duration.ms, duration.ms == 1 ? "" : "s", duration.mms, duration.mms == 1 ? "" : "s");
 
 		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Session-Count", "%u", switch_core_session_count());
+		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Max-Sessions", "%u", switch_core_session_limit(0));
 		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Session-Per-Sec", "%u", runtime.sps);
 		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Session-Since-Startup", "%" SWITCH_SIZE_T_FMT, switch_core_session_id() - 1);
 		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Idle-CPU", "%f", switch_core_idle_cpu());
@@ -98,10 +100,9 @@ static void check_ip(void)
 	char old_ip6[256] = "";
 	int ok4 = 1, ok6 = 1;
 	int mask = 0;
-	static char hostname[256] = "";
 
-	gethostname(hostname, sizeof(hostname));
-	switch_core_set_variable("hostname", hostname);
+	gethostname(runtime.hostname, sizeof(runtime.hostname));
+	switch_core_set_variable("hostname", runtime.hostname);
 
 	switch_find_local_ip(guess_ip4, sizeof(guess_ip4), &mask, AF_INET);
 	switch_find_local_ip(guess_ip6, sizeof(guess_ip6), NULL, AF_INET6);
@@ -198,6 +199,34 @@ SWITCH_DECLARE(FILE *) switch_core_data_channel(switch_text_channel_t channel)
 	return handle;
 }
 
+
+SWITCH_DECLARE(int) switch_core_curl_count(int *val)
+{
+	if (!val) {
+		switch_mutex_lock(runtime.global_mutex);
+		return runtime.curl_count;
+	}
+
+	runtime.curl_count = *val;
+	switch_mutex_unlock(runtime.global_mutex);
+	return 0;
+
+}
+
+
+SWITCH_DECLARE(int) switch_core_ssl_count(int *val)
+{
+	if (!val) {
+		switch_mutex_lock(runtime.global_mutex);
+		return runtime.ssl_count;
+	}
+
+	runtime.ssl_count = *val;
+	switch_mutex_unlock(runtime.global_mutex);
+	return 0;
+
+}
+
 SWITCH_DECLARE(void) switch_core_remove_state_handler(const switch_state_handler_table_t *state_handler)
 {
 	int index, tmp_index = 0;
@@ -266,12 +295,19 @@ SWITCH_DECLARE(const char *) switch_core_get_hostname(void)
 	return runtime.hostname;
 }
 
+SWITCH_DECLARE(const char *) switch_core_get_switchname(void)
+{
+    if (!zstr(runtime.switchname)) return runtime.switchname;
+	return runtime.hostname;
+}
+
+
 SWITCH_DECLARE(char *) switch_core_get_variable(const char *varname)
 {
 	char *val;
-	switch_mutex_lock(runtime.global_var_mutex);
+	switch_thread_rwlock_rdlock(runtime.global_var_rwlock);
 	val = (char *) switch_event_get_header(runtime.global_vars, varname);
-	switch_mutex_unlock(runtime.global_var_mutex);
+	switch_thread_rwlock_unlock(runtime.global_var_rwlock);
 	return val;
 }
 
@@ -279,11 +315,11 @@ SWITCH_DECLARE(char *) switch_core_get_variable_dup(const char *varname)
 {
 	char *val = NULL, *v;
 
-	switch_mutex_lock(runtime.global_var_mutex);
+	switch_thread_rwlock_rdlock(runtime.global_var_rwlock);
 	if ((v = (char *) switch_event_get_header(runtime.global_vars, varname))) {
 		val = strdup(v);
 	}
-	switch_mutex_unlock(runtime.global_var_mutex);
+	switch_thread_rwlock_unlock(runtime.global_var_rwlock);
 
 	return val;
 }
@@ -292,21 +328,21 @@ SWITCH_DECLARE(char *) switch_core_get_variable_pdup(const char *varname, switch
 {
 	char *val = NULL, *v;
 
-	switch_mutex_lock(runtime.global_var_mutex);
+	switch_thread_rwlock_rdlock(runtime.global_var_rwlock);
 	if ((v = (char *) switch_event_get_header(runtime.global_vars, varname))) {
 		val = switch_core_strdup(pool, v);
 	}
-	switch_mutex_unlock(runtime.global_var_mutex);
+	switch_thread_rwlock_unlock(runtime.global_var_rwlock);
 
 	return val;
 }
 
 static void switch_core_unset_variables(void)
 {
-	switch_mutex_lock(runtime.global_var_mutex);
+	switch_thread_rwlock_wrlock(runtime.global_var_rwlock);
 	switch_event_destroy(&runtime.global_vars);
 	switch_event_create_plain(&runtime.global_vars, SWITCH_EVENT_CHANNEL_DATA);
-	switch_mutex_unlock(runtime.global_var_mutex);
+	switch_thread_rwlock_unlock(runtime.global_var_rwlock);
 }
 
 SWITCH_DECLARE(void) switch_core_set_variable(const char *varname, const char *value)
@@ -314,7 +350,7 @@ SWITCH_DECLARE(void) switch_core_set_variable(const char *varname, const char *v
 	char *val;
 
 	if (varname) {
-		switch_mutex_lock(runtime.global_var_mutex);
+		switch_thread_rwlock_wrlock(runtime.global_var_rwlock);
 		val = (char *) switch_event_get_header(runtime.global_vars, varname);
 		if (val) {
 			switch_event_del_header(runtime.global_vars, varname);
@@ -326,7 +362,7 @@ SWITCH_DECLARE(void) switch_core_set_variable(const char *varname, const char *v
 		} else {
 			switch_event_del_header(runtime.global_vars, varname);
 		}
-		switch_mutex_unlock(runtime.global_var_mutex);
+		switch_thread_rwlock_unlock(runtime.global_var_rwlock);
 	}
 }
 
@@ -335,17 +371,17 @@ SWITCH_DECLARE(switch_bool_t) switch_core_set_var_conditional(const char *varnam
 	char *val;
 
 	if (varname) {
-		switch_mutex_lock(runtime.global_var_mutex);
+		switch_thread_rwlock_wrlock(runtime.global_var_rwlock);
 		val = (char *) switch_event_get_header(runtime.global_vars, varname);
 
 		if (val) {
 			if (!val2 || strcmp(val, val2) != 0) {
-				switch_mutex_unlock(runtime.global_var_mutex);
+				switch_thread_rwlock_unlock(runtime.global_var_rwlock);
 				return SWITCH_FALSE;
 			}
 			switch_event_del_header(runtime.global_vars, varname);
 		} else if (!zstr(val2)) {
-			switch_mutex_unlock(runtime.global_var_mutex);
+			switch_thread_rwlock_unlock(runtime.global_var_rwlock);
 			return SWITCH_FALSE;
 		}
 
@@ -356,7 +392,7 @@ SWITCH_DECLARE(switch_bool_t) switch_core_set_var_conditional(const char *varnam
 		} else {
 			switch_event_del_header(runtime.global_vars, varname);
 		}
-		switch_mutex_unlock(runtime.global_var_mutex);
+		switch_thread_rwlock_unlock(runtime.global_var_rwlock);
 	}
 	return SWITCH_TRUE;
 }
@@ -481,9 +517,13 @@ SWITCH_DECLARE(void) switch_core_set_globals(void)
 	DWORD dwBufSize = BUFSIZE;
 	char base_dir[1024];
 	char *lastbacklash;
+
 	GetModuleFileName(NULL, base_dir, BUFSIZE);
 	lastbacklash = strrchr(base_dir, '\\');
 	base_dir[(lastbacklash - base_dir)] = '\0';
+	/* set base_dir as cwd, to be able to use relative paths in scripting languages (e.g. mod_lua) when FS is running as a service or while debugging FS using visual studio */
+	SetCurrentDirectory(base_dir);
+
 #else
 	char base_dir[1024] = SWITCH_PREFIX_DIR;
 #endif
@@ -607,16 +647,11 @@ SWITCH_DECLARE(void) switch_core_set_globals(void)
 	switch_assert(SWITCH_GLOBAL_dirs.temp_dir);
 }
 
-SWITCH_DECLARE(int32_t) set_high_priority(void)
+static int32_t set_priority(void)
 {
 #ifdef WIN32
-	SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+	SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 #else
-
-#ifdef USE_SETRLIMIT
-	struct rlimit lim = { RLIM_INFINITY, RLIM_INFINITY };
-#endif
-
 #ifdef USE_SCHED_SETSCHEDULER
 	/*
 	 * Try to use a round-robin scheduler
@@ -638,12 +673,38 @@ SWITCH_DECLARE(int32_t) set_high_priority(void)
 	 */
 	if (setpriority(PRIO_PROCESS, getpid(), -10) < 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Could not set nice level\n");
+		return -1;
 	}
 #else
 	if (nice(-10) != -10) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Could not set nice level\n");
+		return -1;
 	}
 #endif
+#endif
+	return 0;
+}
+
+
+SWITCH_DECLARE(int32_t) set_normal_priority(void)
+{
+	return set_priority();
+}
+
+SWITCH_DECLARE(int32_t) set_high_priority(void)
+{
+#ifdef WIN32
+	SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+#else
+	int pri;
+
+#ifdef USE_SETRLIMIT
+	struct rlimit lim = { RLIM_INFINITY, RLIM_INFINITY };
+#endif
+	
+	if ((pri = set_priority())) {
+		return pri;
+	}
 
 #ifdef USE_SETRLIMIT
 	/*
@@ -1256,6 +1317,7 @@ static void switch_core_set_serial(void)
 
 		if ((write_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR)) >= 0) {
 			bytes = write(write_fd, buf, sizeof(buf));
+			bytes++;
 			close(write_fd);
 			write_fd = -1;
 		}
@@ -1267,6 +1329,7 @@ static void switch_core_set_serial(void)
 
 	switch_core_set_variable("switch_serial", buf);
 }
+
 
 SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switch_bool_t console, const char **err)
 {
@@ -1280,7 +1343,13 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 		/* one per customer */
 		return SWITCH_STATUS_SUCCESS;
 	}
+	
+	memset(&runtime, 0, sizeof(runtime));
+	gethostname(runtime.hostname, sizeof(runtime.hostname));
 
+	runtime.max_db_handles = 50;
+	runtime.db_handle_timeout = 5000000;;
+	
 	runtime.runlevel++;
 	runtime.sql_buffer_len = 1024 * 32;
 	runtime.max_sql_buffer_len = 1024 * 1024;
@@ -1332,7 +1401,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 
 	switch_mutex_init(&runtime.session_hash_mutex, SWITCH_MUTEX_NESTED, runtime.memory_pool);
 	switch_mutex_init(&runtime.global_mutex, SWITCH_MUTEX_NESTED, runtime.memory_pool);
-	switch_mutex_init(&runtime.global_var_mutex, SWITCH_MUTEX_NESTED, runtime.memory_pool);
+
+	switch_thread_rwlock_create(&runtime.global_var_rwlock, runtime.memory_pool);
 	switch_core_set_globals();
 	switch_core_session_init(runtime.memory_pool);
 	switch_event_create_plain(&runtime.global_vars, SWITCH_EVENT_CHANNEL_DATA);
@@ -1348,9 +1418,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 		runtime.console = stdout;
 	}
 
-	gethostname(runtime.hostname, sizeof(runtime.hostname));
 	switch_core_set_variable("hostname", runtime.hostname);
-
 	switch_find_local_ip(guess_ip, sizeof(guess_ip), &mask, AF_INET);
 	switch_core_set_variable("local_ip_v4", guess_ip);
 	in.s_addr = mask;
@@ -1374,16 +1442,17 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 	}
 
 	if (switch_test_flag((&runtime), SCF_USE_AUTO_NAT)) {
-		switch_nat_init(runtime.memory_pool);
+		switch_nat_init(runtime.memory_pool, switch_test_flag((&runtime), SCF_USE_NAT_MAPPING));
 	}
 
 	switch_log_init(runtime.memory_pool, runtime.colorize_console);
 
 	if (flags & SCF_MINIMAL) return SWITCH_STATUS_SUCCESS;
 													   
-	runtime.tipping_point = 5000;
+	runtime.tipping_point = 0;
 	runtime.timer_affinity = -1;
-	
+	runtime.microseconds_per_tick = 20000;
+
 	switch_load_core_config("switch.conf");
 
 	switch_core_state_machine_init(runtime.memory_pool);
@@ -1407,6 +1476,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 
 	switch_uuid_get(&uuid);
 	switch_uuid_format(runtime.uuid_str, &uuid);
+	switch_ssl_init_ssl_locks();
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -1416,7 +1486,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 static void handle_SIGQUIT(int sig)
 {
 	if (sig);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "Sig Quit!\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "Sig Quit!\n");
 	return;
 }
 #endif
@@ -1425,7 +1495,7 @@ static void handle_SIGQUIT(int sig)
 static void handle_SIGPIPE(int sig)
 {
 	if (sig);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "Sig Pipe!\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "Sig Pipe!\n");
 	return;
 }
 #endif
@@ -1434,7 +1504,7 @@ static void handle_SIGPIPE(int sig)
 static void handle_SIGPOLL(int sig)
 {
 	if (sig);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "Sig Poll!\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "Sig Poll!\n");
 	return;
 }
 #endif
@@ -1443,7 +1513,7 @@ static void handle_SIGPOLL(int sig)
 static void handle_SIGIO(int sig)
 {
 	if (sig);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "Sig I/O!\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "Sig I/O!\n");
 	return;
 }
 #endif
@@ -1451,7 +1521,7 @@ static void handle_SIGIO(int sig)
 #ifdef TRAP_BUS
 static void handle_SIGBUS(int sig)
 {
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "Sig BUS!\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "Sig BUS!\n");
 	return;
 }
 #endif
@@ -1549,6 +1619,23 @@ static void switch_load_core_config(const char *file)
 					if (tmp > -1 && tmp < 11) {
 						switch_core_session_ctl(SCSC_DEBUG_LEVEL, &tmp);
 					}
+				} else if (!strcasecmp(var, "max-db-handles")) {
+					long tmp = atol(val);
+
+					if (tmp > 4 && tmp < 5001) {
+						runtime.max_db_handles = (uint32_t) tmp;
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "max-db-handles must be between 5 and 5000\n");
+					}
+				} else if (!strcasecmp(var, "db-handle-timeout")) {
+					long tmp = atol(val);
+					
+					if (tmp > 0 && tmp < 5001) {
+						runtime.db_handle_timeout = (uint32_t) tmp * 1000000;
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "db-handle-timeout must be between 1 and 5000\n");
+					}
+					
 				} else if (!strcasecmp(var, "multiple-registrations")) {
 					runtime.multiple_registrations = switch_true(val);
 				} else if (!strcasecmp(var, "sql-buffer-len")) {
@@ -1614,13 +1701,15 @@ static void switch_load_core_config(const char *file)
 						switch_core_default_dtmf_duration((uint32_t) tmp);
 					}
 				} else if (!strcasecmp(var, "enable-monotonic-timing")) {
-					switch_time_set_monotonic(switch_true(var));
+					switch_time_set_monotonic(switch_true(val));
+				} else if (!strcasecmp(var, "enable-softtimer-timerfd")) {
+					switch_time_set_timerfd(switch_true(val));
 				} else if (!strcasecmp(var, "enable-clock-nanosleep")) {
-					switch_time_set_nanosleep(switch_true(var));
+					switch_time_set_nanosleep(switch_true(val));
 				} else if (!strcasecmp(var, "enable-cond-yield")) {
-					switch_time_set_cond_yield(switch_true(var));
+					switch_time_set_cond_yield(switch_true(val));
 				} else if (!strcasecmp(var, "enable-timer-matrix")) {
-					switch_time_set_matrix(switch_true(var));
+					switch_time_set_matrix(switch_true(val));
 				} else if (!strcasecmp(var, "max-sessions") && !zstr(val)) {
 					switch_core_session_limit(atoi(val));
 				} else if (!strcasecmp(var, "verbose-channel-events") && !zstr(val)) {
@@ -1634,6 +1723,8 @@ static void switch_load_core_config(const char *file)
 					switch_core_min_idle_cpu(atof(val));
 				} else if (!strcasecmp(var, "tipping-point") && !zstr(val)) {
 					runtime.tipping_point = atoi(val);
+				} else if (!strcasecmp(var, "1ms-timer") && switch_true(val)) {
+					runtime.microseconds_per_tick = 1000;
 				} else if (!strcasecmp(var, "timer-affinity") && !zstr(val)) {
 					if (!strcasecmp(val, "disabled")) {
 						runtime.timer_affinity = -1;
@@ -1668,6 +1759,9 @@ static void switch_load_core_config(const char *file)
 				} else if (!strcasecmp(var, "rtp-enable-zrtp")) {
 					switch_core_set_variable("zrtp_enabled", val);
 #endif
+                } else if (!strcasecmp(var, "switchname") && !zstr(val)) {
+					runtime.switchname = switch_core_strdup(runtime.memory_pool, val);
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Set switchname to %s\n", runtime.switchname);
 				}
 			}
 		}
@@ -1722,27 +1816,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init_and_modload(switch_core_flag_t 
 
 	runtime.runlevel++;
 
-	/* set signal handlers */
-	signal(SIGINT, SIG_IGN);
-#ifdef SIGPIPE
-	signal(SIGPIPE, handle_SIGPIPE);
-#endif
-#ifdef SIGQUIT
-	signal(SIGQUIT, handle_SIGQUIT);
-#endif
-#ifdef SIGPOLL
-	signal(SIGPOLL, handle_SIGPOLL);
-#endif
-#ifdef SIGIO
-	signal(SIGIO, handle_SIGIO);
-#endif
-#ifdef TRAP_BUS
-	signal(SIGBUS, handle_SIGBUS);
-#endif
-#ifdef SIGUSR1
-	signal(SIGUSR1, handle_SIGHUP);
-#endif
-	signal(SIGHUP, handle_SIGHUP);
+	switch_core_set_signal_handlers();
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "Bringing up environment.\n");
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "Loading Modules.\n");
@@ -1755,6 +1829,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_init_and_modload(switch_core_flag_t 
 	switch_load_network_lists(SWITCH_FALSE);
 
 	switch_load_core_config("post_load_switch.conf");
+
+	switch_core_set_signal_handlers();
 
 	if (switch_event_create(&event, SWITCH_EVENT_STARTUP) == SWITCH_STATUS_SUCCESS) {
 		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Event-Info", "System Ready");
@@ -1818,6 +1894,31 @@ static void win_shutdown(void)
 	}
 }
 #endif
+
+SWITCH_DECLARE(void) switch_core_set_signal_handlers(void)
+{
+	/* set signal handlers */
+	signal(SIGINT, SIG_IGN);
+#ifdef SIGPIPE
+	signal(SIGPIPE, handle_SIGPIPE);
+#endif
+#ifdef SIGQUIT
+	signal(SIGQUIT, handle_SIGQUIT);
+#endif
+#ifdef SIGPOLL
+	signal(SIGPOLL, handle_SIGPOLL);
+#endif
+#ifdef SIGIO
+	signal(SIGIO, handle_SIGIO);
+#endif
+#ifdef TRAP_BUS
+	signal(SIGBUS, handle_SIGBUS);
+#endif
+#ifdef SIGUSR1
+	signal(SIGUSR1, handle_SIGHUP);
+#endif
+	signal(SIGHUP, handle_SIGHUP);
+}
 
 SWITCH_DECLARE(uint32_t) switch_core_debug_level(void)
 {
@@ -1931,6 +2032,12 @@ SWITCH_DECLARE(int32_t) switch_core_session_ctl(switch_session_ctl_t cmd, void *
 				switch_clear_flag((&runtime), SCF_NO_NEW_SESSIONS);
 			}
 		}
+		break;
+	case SCSC_PAUSE_CHECK:
+		newintval = !!switch_test_flag((&runtime), SCF_NO_NEW_SESSIONS);
+		break;
+	case SCSC_READY_CHECK:
+		newintval = switch_core_ready();
 		break;
 	case SCSC_SHUTDOWN_CHECK:
 		newintval = !!switch_test_flag((&runtime), SCF_SHUTDOWN_REQUESTED);
@@ -2047,6 +2154,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_destroy(void)
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "Clean up modules.\n");
 
 	switch_loadable_module_shutdown();
+
+	switch_ssl_destroy_ssl_locks();
 
 	if (switch_test_flag((&runtime), SCF_USE_SQL)) {
 		switch_core_sqldb_stop();
