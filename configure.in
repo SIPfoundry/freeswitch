@@ -245,7 +245,8 @@ if test "x${ax_cv_c_compiler_vendor}"  =  "xsun" ; then
 elif test "x${ax_cv_c_compiler_vendor}" = "xgnu" ; then
     APR_ADDTO(SWITCH_AM_CFLAGS, -fPIC)
     APR_ADDTO(SWITCH_AM_CXXFLAGS, -fPIC)
-    APR_ADDTO(SWITCH_AM_CFLAGS, -Werror)
+dnl Freeswitch does not compile on Fedora 15 or greater
+dnl    APR_ADDTO(SWITCH_AM_CFLAGS, -Werror)
     if test "${enable_64}" = "yes"; then
 	case "$host" in
              *darwin10.*|*darwin9.*|*darwin8.*)
