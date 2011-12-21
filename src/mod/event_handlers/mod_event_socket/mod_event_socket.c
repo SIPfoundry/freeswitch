@@ -184,7 +184,7 @@ static switch_status_t socket_logger(const switch_log_node_t *node, switch_log_l
 			} else {
 				switch_log_node_free(&dnode);
 				if (++l->lost_logs > MAX_MISSED) {
-					kill_listener(l, "Disconnected due to log queue failure.\n");
+					kill_listener(l, NULL);
 				}
 			}
 		}
@@ -384,7 +384,7 @@ static void event_handler(switch_event_t *event)
 					}
 				} else {
 					if (++l->lost_events > MAX_MISSED) {
-						kill_listener(l, "Disconnected due to event queue failure.\n");
+						kill_listener(l, NULL);
 					}
 					switch_event_destroy(&clone);
 				}
@@ -990,19 +990,19 @@ SWITCH_STANDARD_API(event_sink_function)
 		stream->write_function(stream, "<events>\n");
 
 		while (switch_queue_trypop(listener->event_queue, &pop) == SWITCH_STATUS_SUCCESS) {
-			char *etype;
+			//char *etype;
 			pevent = (switch_event_t *) pop;
 
 			if (listener->format == EVENT_FORMAT_PLAIN) {
-				etype = "plain";
+				//etype = "plain";
 				switch_event_serialize(pevent, &listener->ebuf, SWITCH_TRUE);
 				stream->write_function(stream, "<event type=\"plain\">\n%s</event>", listener->ebuf);
 			} else if (listener->format == EVENT_FORMAT_JSON) {
-				etype = "json";
+				//etype = "json";
 				switch_event_serialize_json(pevent, &listener->ebuf);
 			} else {
 				switch_xml_t xml;
-				etype = "xml";
+				//etype = "xml";
 
 				if ((xml = switch_event_xmlize(pevent, SWITCH_VA_NONE))) {
 					listener->ebuf = switch_xml_toxml(xml, SWITCH_FALSE);
@@ -1095,7 +1095,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_event_socket_load)
 static switch_status_t read_packet(listener_t *listener, switch_event_t **event, uint32_t timeout)
 {
 	switch_size_t mlen, bytes = 0;
-	char mbuf[2048] = "";
+	char *mbuf = NULL;
 	char buf[1024] = "";
 	switch_size_t len;
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
@@ -1105,15 +1105,19 @@ static switch_status_t read_packet(listener_t *listener, switch_event_t **event,
 	void *pop;
 	char *ptr;
 	uint8_t crcount = 0;
-	uint32_t max_len = sizeof(mbuf);
+	uint32_t max_len = 10485760, block_len = 2048, buf_len = 0;
 	switch_channel_t *channel = NULL;
 	int clen = 0;
 
 	*event = NULL;
 
 	if (prefs.done) {
-		return SWITCH_STATUS_FALSE;
+		switch_goto_status(SWITCH_STATUS_FALSE, end);
 	}
+
+	switch_zmalloc(mbuf, block_len);
+	switch_assert(mbuf);
+	buf_len = block_len;
 
 	start = switch_epoch_time_now(NULL);
 	ptr = mbuf;
@@ -1126,10 +1130,24 @@ static switch_status_t read_packet(listener_t *listener, switch_event_t **event,
 		uint8_t do_sleep = 1;
 		mlen = 1;
 
+		if (bytes == buf_len - 1) {
+			char *tmp;
+			int pos;
+
+			pos = (ptr - mbuf);
+			buf_len += block_len;
+			tmp = realloc(mbuf, buf_len);
+			switch_assert(tmp);
+			mbuf = tmp;
+			memset(mbuf + bytes, 0, buf_len - bytes);
+			ptr = (mbuf + pos);
+
+		}
+		
 		status = switch_socket_recv(listener->sock, ptr, &mlen);
 
 		if (prefs.done || (!SWITCH_STATUS_IS_BREAK(status) && status != SWITCH_STATUS_SUCCESS)) {
-			return SWITCH_STATUS_FALSE;
+			switch_goto_status(SWITCH_STATUS_FALSE, end);
 		}
 
 		if (mlen) {
@@ -1180,7 +1198,6 @@ static switch_status_t read_packet(listener_t *listener, switch_event_t **event,
 								}
 							}
 							if (var && val) {
-								switch_event_del_header(*event, var);
 								switch_event_add_header_string(*event, SWITCH_STACK_BOTTOM, var, val);
 								if (!strcasecmp(var, "content-length")) {
 									clen = atoi(val);
@@ -1199,7 +1216,7 @@ static switch_status_t read_packet(listener_t *listener, switch_event_t **event,
 
 											if (prefs.done || (!SWITCH_STATUS_IS_BREAK(status) && status != SWITCH_STATUS_SUCCESS)) {
 												free(body);												
-												return SWITCH_STATUS_FALSE;
+												switch_goto_status(SWITCH_STATUS_FALSE, end);
 											}
 
 											/*
@@ -1231,7 +1248,7 @@ static switch_status_t read_packet(listener_t *listener, switch_event_t **event,
 			elapsed = (uint32_t) (switch_epoch_time_now(NULL) - start);
 			if (elapsed >= timeout) {
 				switch_clear_flag_locked(listener, LFLAG_RUNNING);
-				return SWITCH_STATUS_FALSE;
+				switch_goto_status(SWITCH_STATUS_FALSE, end);
 			}
 		}
 
@@ -1355,6 +1372,9 @@ static switch_status_t read_packet(listener_t *listener, switch_event_t **event,
 		}
 	}
 
+ end:
+
+	//switch_safe_free(mbuf);
 	return status;
 
 }
@@ -1884,11 +1904,30 @@ static switch_status_t parse_command(listener_t *listener, switch_event_t **even
 				char *uuid;
 
 				if ((uuid = cmd + 9)) {
+					char *fmt;
 					strip_cr(uuid);
-
+					
+					if ((fmt = strchr(uuid, ' '))) {
+						*fmt++ = '\0';
+					}
+						
 					if (!(listener->session = switch_core_session_locate(uuid))) {
-						switch_snprintf(reply, reply_len, "-ERR invalid uuid");
-						goto done;
+						if (fmt) {
+							switch_snprintf(reply, reply_len, "-ERR invalid uuid");
+							goto done;
+						} else {
+							fmt = uuid;
+						}
+					}
+
+					if ((fmt = strchr(uuid, ' '))) {
+						if (!strcasecmp(fmt, "xml")) {
+							listener->format = EVENT_FORMAT_XML;
+						} else if (!strcasecmp(fmt, "plain")) {
+							listener->format = EVENT_FORMAT_PLAIN;
+						} else if (!strcasecmp(fmt, "json")) {
+							listener->format = EVENT_FORMAT_JSON;
+						}						
 					}
 
 					switch_set_flag_locked(listener, LFLAG_SESSION);
@@ -2655,7 +2694,7 @@ static int config(void)
 					prefs.port = (uint16_t) atoi(val);
 				} else if (!strcmp(var, "password")) {
 					set_pref_pass(val);
-				} else if (!strcasecmp(var, "apply-inbound-acl")) {
+				} else if (!strcasecmp(var, "apply-inbound-acl") && ! zstr(val)) {
 					if (prefs.acl_count < MAX_ACL) {
 						prefs.acl[prefs.acl_count++] = strdup(val);
 					} else {

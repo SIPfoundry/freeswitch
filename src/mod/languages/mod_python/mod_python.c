@@ -77,13 +77,11 @@ static void eval_some_python(const char *funcname, char *args, switch_core_sessi
 	char *dupargs = NULL;
 	char *argv[2] = { 0 };
 	int argc;
-	int lead = 0;
 	char *script = NULL;
 	PyObject *module = NULL, *sp = NULL, *stp = NULL, *eve = NULL;
 	PyObject *function = NULL;
 	PyObject *arg = NULL;
 	PyObject *result = NULL;
-	switch_channel_t *channel = NULL;
 	char *p;
 
 	if (str) {
@@ -104,8 +102,6 @@ static void eval_some_python(const char *funcname, char *args, switch_core_sessi
 	}
 
 	script = strdup(switch_str_nil(argv[0]));
-
-	lead = 1;
 
 	if ((p = strstr(script, "::"))) {
 		*p = '\0';
@@ -157,7 +153,6 @@ static void eval_some_python(const char *funcname, char *args, switch_core_sessi
 	}
 
 	if (session) {
-		channel = switch_core_session_get_channel(session);
 		sp = mod_python_conjure_session(module, session);
 	}
 
@@ -408,10 +403,20 @@ SWITCH_STANDARD_API(launch_python)
 	return SWITCH_STATUS_SUCCESS;
 }
 
+
+SWITCH_STANDARD_CHAT_APP(python_chat_function)
+{
+	eval_some_python("chat", (char *) data, NULL, NULL, message, NULL, NULL);
+	return SWITCH_STATUS_SUCCESS;
+
+}
+
 SWITCH_MODULE_LOAD_FUNCTION(mod_python_load)
 {
 	switch_api_interface_t *api_interface;
 	switch_application_interface_t *app_interface;
+	switch_chat_application_interface_t *chat_app_interface;
+
 	char *pp = getenv("PYTHONPATH");
 
 	if (pp) {
@@ -459,6 +464,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_python_load)
 	SWITCH_ADD_API(api_interface, "python", "run a python script", api_python, "python </path/to/script>");
 	SWITCH_ADD_APP(app_interface, "python", "Launch python ivr", "Run a python ivr on a channel", python_function, "<script> [additional_vars [...]]",
 				   SAF_SUPPORT_NOMEDIA);
+	SWITCH_ADD_CHAT_APP(chat_app_interface, "python", "execute a python script", "execute a python script", python_chat_function, "<script>", SCAF_NONE);
 
 	/* indicate that the module should continue to be loaded */
 	return SWITCH_STATUS_NOUNLOAD;

@@ -72,14 +72,18 @@ public class ESLconnection {
     return (cPtr == 0) ? null : new ESLevent(cPtr, true);
   }
 
-  public ESLevent bgapi(String cmd, String arg) {
-    long cPtr = eslJNI.ESLconnection_bgapi(swigCPtr, this, cmd, arg);
+  public ESLevent bgapi(String cmd, String arg, String job_uuid) {
+    long cPtr = eslJNI.ESLconnection_bgapi(swigCPtr, this, cmd, arg, job_uuid);
     return (cPtr == 0) ? null : new ESLevent(cPtr, true);
   }
 
   public ESLevent sendEvent(ESLevent send_me) {
     long cPtr = eslJNI.ESLconnection_sendEvent(swigCPtr, this, ESLevent.getCPtr(send_me), send_me);
     return (cPtr == 0) ? null : new ESLevent(cPtr, true);
+  }
+
+  public int sendMSG(ESLevent send_me, String uuid) {
+    return eslJNI.ESLconnection_sendMSG(swigCPtr, this, ESLevent.getCPtr(send_me), send_me, uuid);
   }
 
   public ESLevent recvEvent() {

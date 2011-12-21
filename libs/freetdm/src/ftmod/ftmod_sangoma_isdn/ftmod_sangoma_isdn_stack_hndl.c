@@ -34,7 +34,7 @@
 
 #include "ftmod_sangoma_isdn.h"
 static ftdm_status_t sngisdn_cause_val_requires_disconnect(ftdm_channel_t *ftdmchan, CauseDgn *causeDgn);
-static void sngisdn_process_restart_confirm(ftdm_channel_t *ftdmchan);
+static ftdm_status_t sngisdn_bring_down(ftdm_channel_t *ftdmchan);
 
 /* Remote side transmit a SETUP */
 void sngisdn_process_con_ind (sngisdn_event_data_t *sngisdn_event)
@@ -134,11 +134,8 @@ void sngisdn_process_con_ind (sngisdn_event_data_t *sngisdn_event)
 			get_calling_subaddr(ftdmchan, &conEvnt->cgPtySad);
 			get_prog_ind_ie(ftdmchan, &conEvnt->progInd);
 			get_facility_ie(ftdmchan, &conEvnt->facilityStr);			
+			get_calling_name(ftdmchan, conEvnt);
 			
-			if (get_calling_name_from_display(ftdmchan, &conEvnt->display) != FTDM_SUCCESS) {
-				get_calling_name_from_usr_usr(ftdmchan, &conEvnt->usrUsr);
-			}
-
 			ftdm_log_chan(sngisdn_info->ftdmchan, FTDM_LOG_INFO, "Incoming call: Called No:[%s] Calling No:[%s]\n", ftdmchan->caller_data.dnis.digits, ftdmchan->caller_data.cid_num.digits);
 
 			if (conEvnt->bearCap[0].eh.pres) {
@@ -160,8 +157,12 @@ void sngisdn_process_con_ind (sngisdn_event_data_t *sngisdn_event)
 				}
 			}
 
-			/* this should be in get_facility_ie function, fix this later */
-			if (signal_data->facility == SNGISDN_OPT_TRUE && conEvnt->facilityStr.eh.pres) {
+#if 1
+			/* this section will not be needed once asn decoding function with key-value pairs is implemented */
+			if (signal_data->facility == SNGISDN_OPT_TRUE &&
+				signal_data->facility_ie_decode != SNGISDN_OPT_FALSE &&
+				conEvnt->facilityStr.eh.pres) {
+				
 				/* Verify whether the Caller Name will come in a subsequent FACILITY message */
 				uint16_t ret_val;
 				char retrieved_str[255];
@@ -180,14 +181,14 @@ void sngisdn_process_con_ind (sngisdn_event_data_t *sngisdn_event)
 					/* Launch timer in case we never get a FACILITY msg */
 					if (signal_data->facility_timeout) {
 						ftdm_sched_timer(signal_data->sched, "facility_timeout", signal_data->facility_timeout,
-										 sngisdn_facility_timeout, (void*) sngisdn_info, &sngisdn_info->timers[SNGISDN_TIMER_FACILITY]);
+										 sngisdn_facility_timeout, (void*) sngisdn_info, &sngisdn_info->timers[SNGISDN_CHAN_TIMER_FACILITY]);
 					}
 					break;
 				} else if (ret_val == 0) {
 					strcpy(ftdmchan->caller_data.cid_name, retrieved_str);
 				}
 			}
-			
+#endif			
 			if (signal_data->overlap_dial == SNGISDN_OPT_TRUE && !conEvnt->sndCmplt.eh.pres) {
 				ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_COLLECT);
 			} else {
@@ -313,8 +314,9 @@ void sngisdn_process_con_cfm (sngisdn_event_data_t *sngisdn_event)
 		}
 	} else {
 		switch(ftdmchan->state) {
+			case FTDM_CHANNEL_STATE_TRANSFER:
 			case FTDM_CHANNEL_STATE_UP:
-				/* This is the only valid state we should get a CONNECT ACK on */
+				/* These are the only valid states we should get a CONNECT ACK on */
 				/* do nothing */
 				break;
 			case FTDM_CHANNEL_STATE_HANGUP_COMPLETE:
@@ -359,8 +361,9 @@ void sngisdn_process_cnst_ind (sngisdn_event_data_t *sngisdn_event)
 													(evntType == MI_CALLPROC)?"PROCEED":
 													(evntType == MI_PROGRESS)?"PROGRESS":
 													(evntType == MI_SETUPACK)?"SETUP ACK":
-															(evntType == MI_INFO)?"INFO":"UNKNOWN",
-															suId, suInstId, spInstId, ces);
+													(evntType == MI_NOTIFY)?"NOTIFY":
+													(evntType == MI_INFO)?"INFO":"UNKNOWN",
+													suId, suInstId, spInstId, ces);
 	
 	switch(evntType) {
 		case MI_CALLPROC:			
@@ -491,7 +494,10 @@ void sngisdn_process_cnst_ind (sngisdn_event_data_t *sngisdn_event)
 						break;
 				}
 			}
-
+			break;
+		case MI_NOTIFY:
+			ftdm_log_chan(ftdmchan, FTDM_LOG_DEBUG, "Processing NOTIFY (suId:%u suInstId:%u spInstId:%u)\n", suId, suInstId, spInstId);
+			/* Do nothing */
 			break;
 		default:
 			ftdm_log_chan_msg(ftdmchan, FTDM_LOG_WARNING, "Unhandled STATUS event\n");
@@ -644,7 +650,7 @@ void sngisdn_process_rel_ind (sngisdn_event_data_t *sngisdn_event)
 			break;
 		case FTDM_CHANNEL_STATE_TERMINATING:
 			if (sngisdn_test_flag(sngisdn_info, FLAG_GLARE) &&
-								sngisdn_info->glare.suInstId != suInstId) {
+				sngisdn_info->glare.suInstId != suInstId) {
 				/* This release if for the outbound call that we already started clearing */
 
 				ftdm_log_chan_msg(ftdmchan, FTDM_LOG_DEBUG, "Received RELEASE for local glared call\n");
@@ -657,12 +663,11 @@ void sngisdn_process_rel_ind (sngisdn_event_data_t *sngisdn_event)
 			}
 			break;
 		case FTDM_CHANNEL_STATE_RESET:
-			ftdm_log_chan_msg(ftdmchan, FTDM_LOG_DEBUG, "Processing SETUP but channel in RESET state, ignoring\n");
+			ftdm_log_chan_msg(ftdmchan, FTDM_LOG_DEBUG, "Processing RELEASE but channel in RESET state, ignoring\n");
 			break;
 		default:
 			ftdm_log_chan(ftdmchan, FTDM_LOG_CRIT, "Received RELEASE in an invalid state (%s)\n",
 							ftdm_channel_state2str(ftdmchan->state));
-
 			break;
 	}
 
@@ -803,17 +808,10 @@ void sngisdn_process_fac_ind (sngisdn_event_data_t *sngisdn_event)
 
 	if (signal_data->facility_ie_decode == SNGISDN_OPT_FALSE) {
 		/* If Facility decoding is disabled, we do not care about current call state, just pass event up to user */
-		ftdm_sigmsg_t sigev;
 		if (facEvnt->facElmt.facStr.pres) {
 			get_facility_ie_str(ftdmchan, &facEvnt->facElmt.facStr.val[2], facEvnt->facElmt.facStr.len-2);
+			sngisdn_send_signal(sngisdn_info, FTDM_SIGEVENT_FACILITY);
 		}
-		memset(&sigev, 0, sizeof(sigev));
-		sigev.chan_id = ftdmchan->chan_id;
-		sigev.span_id = ftdmchan->span_id;
-		sigev.channel = ftdmchan;
-		
-		sigev.event_id = FTDM_SIGEVENT_FACILITY;
-		ftdm_span_send_signal(ftdmchan->span, &sigev);
 		ISDN_FUNC_TRACE_EXIT(__FUNCTION__);
 		return;
 	}
@@ -830,15 +828,15 @@ void sngisdn_process_fac_ind (sngisdn_event_data_t *sngisdn_event)
 				If there will be no information following, but current FACILITY IE contains a caller name, returns 0
 				If there will be information following, returns 1
 				*/
-
+				
 				if (sng_isdn_retrieve_facility_caller_name(&facEvnt->facElmt.facStr.val[2], facEvnt->facElmt.facStr.len, retrieved_str) == 0) {
 					strcpy(ftdmchan->caller_data.cid_name, retrieved_str);
 				} else {
-					ftdm_log_chan_msg(ftdmchan, FTDM_LOG_WARNING, "Failed to retrieve Caller Name from Facility IE\n");
+					ftdm_log_chan_msg(ftdmchan, FTDM_LOG_DEBUG, "Failed to retrieve Caller Name from Facility IE\n");
 				}
 				if (signal_data->facility_timeout) {
 					/* Cancel facility timeout */
-					ftdm_sched_cancel_timer(signal_data->sched, sngisdn_info->timers[SNGISDN_TIMER_FACILITY]);
+					ftdm_sched_cancel_timer(signal_data->sched, sngisdn_info->timers[SNGISDN_CHAN_TIMER_FACILITY]);
 				}
 			}
 
@@ -884,6 +882,12 @@ void sngisdn_process_sta_cfm (sngisdn_event_data_t *sngisdn_event)
 	uint8_t call_state = 0;
 
 	ISDN_FUNC_TRACE_ENTER(__FUNCTION__);
+
+	if (!suInstId && !spInstId) {
+		/* We already cleared this call */
+		ftdm_log_chan(ftdmchan, FTDM_LOG_DEBUG, "Dropping STATUS CONFIRM (suId:%u suInstId:%u spInstId:%u)\n", suId, suInstId, spInstId);
+		return;
+	}
 	
 	if (staEvnt->callSte.eh.pres && staEvnt->callSte.callGlblSte.pres) {
 		call_state = staEvnt->callSte.callGlblSte.val;
@@ -923,36 +927,8 @@ void sngisdn_process_sta_cfm (sngisdn_event_data_t *sngisdn_event)
 		switch(call_state) {
 			/* Sere ITU-T Q931 for definition of call states */
 			case 0:	/* Remote switch thinks there are no calls on this channel */
-				switch (ftdmchan->state) {
-					case FTDM_CHANNEL_STATE_COLLECT:
-					case FTDM_CHANNEL_STATE_DIALING:
-					case FTDM_CHANNEL_STATE_UP:
-						sngisdn_set_flag(sngisdn_info, FLAG_REMOTE_ABORT);
-						ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_TERMINATING);
-						break;
-					case FTDM_CHANNEL_STATE_TERMINATING:
-						/* We are in the process of clearing local states,
-						just make sure we will not send any messages to remote switch */
-						sngisdn_set_flag(sngisdn_info, FLAG_REMOTE_ABORT);
-						break;
-					case FTDM_CHANNEL_STATE_HANGUP:
-						/* This cannot happen, state_advance always sets
-						ftdmchan to STATE_HANGUP_COMPLETE when in STATE_HANGUP
-						and we called check_for_state_change earlier so something is very wrong here!!! */
-						ftdm_log_chan_msg(ftdmchan, FTDM_LOG_CRIT, "How can we we in FTDM_CHANNEL_STATE_HANGUP after checking for state change?\n");
-						ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_DOWN);
-						break;
-					case FTDM_CHANNEL_STATE_HANGUP_COMPLETE:
-						/* We were waiting for remote switch to send RELEASE COMPLETE
-						but this will not happen, so just clear local state */
-						ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_DOWN);
-						break;
-					case FTDM_CHANNEL_STATE_DOWN:
-						/* If our local state is down as well, then there is nothing to do */
-						break;
-					default:
-						ftdm_log_chan(ftdmchan, FTDM_LOG_CRIT, "Don't know how to handle incompatible state. remote call state:%d our state:%s\n", call_state, ftdm_channel_state2str(ftdmchan->state));
-						break;
+				if (sngisdn_bring_down(ftdmchan) != FTDM_SUCCESS) {
+					ftdm_log_chan(ftdmchan, FTDM_LOG_CRIT, "Don't know how to handle incompatible state. remote call state:%d our state:%s\n", call_state, ftdm_channel_state2str(ftdmchan->state));
 				}
 				break;
 			case 1:
@@ -1145,23 +1121,48 @@ void sngisdn_process_srv_cfm (sngisdn_event_data_t *sngisdn_event)
 	return;
 }
 
-static void sngisdn_process_restart_confirm(ftdm_channel_t *ftdmchan)
+static ftdm_status_t sngisdn_bring_down(ftdm_channel_t *ftdmchan)
 {
+	sngisdn_chan_data_t *sngisdn_info = (sngisdn_chan_data_t*)ftdmchan->call_data;
+	ftdm_status_t status = FTDM_SUCCESS;
+
+	ftdm_log_chan(ftdmchan, FTDM_LOG_DEBUG, "Bringing channel to DOWN state (%s)\n", ftdm_channel_state2str(ftdmchan->state));
 	switch (ftdmchan->state) {
-		case FTDM_CHANNEL_STATE_RESET:
-			ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_DOWN);
-			break;
 		case FTDM_CHANNEL_STATE_DOWN:
 			/* Do nothing */
 			break;
+		case FTDM_CHANNEL_STATE_RESET:
+			ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_DOWN);
+			break;
+		case FTDM_CHANNEL_STATE_COLLECT:
+		case FTDM_CHANNEL_STATE_DIALING:
+		case FTDM_CHANNEL_STATE_UP:
+			sngisdn_set_flag(sngisdn_info, FLAG_REMOTE_ABORT);
+			ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_TERMINATING);
+			break;
+		case FTDM_CHANNEL_STATE_TERMINATING:
+			/* We are already waiting for usr to respond to SIGEVENT stop.
+				FreeTDM already scheduled a timout in case the User does respond to
+				SIGEVENT_STOP, no need to do anything here */			
+			break;
+		case FTDM_CHANNEL_STATE_HANGUP:
+			/* This cannot happen, state_advance always sets
+			ftdmchan to STATE_HANGUP_COMPLETE when in STATE_HANGUP
+			and we called check_for_state_change earlier so something is very wrong here!!! */
+			ftdm_log_chan_msg(ftdmchan, FTDM_LOG_CRIT, "How can we we in FTDM_CHANNEL_STATE_HANGUP after checking for state change?\n");
+			ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_DOWN);
+			break;
+		case FTDM_CHANNEL_STATE_HANGUP_COMPLETE:
+			/* We were waiting for remote switch to send RELEASE COMPLETE
+			but this will not happen, so just clear local state */
+			ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_DOWN);
+			break;
 		default:
-			ftdm_log_chan(ftdmchan, FTDM_LOG_CRIT, "Received RESTART CFM in an invalid state (%s)\n",
-						  ftdm_channel_state2str(ftdmchan->state));
+			status = FTDM_FAIL;
+
 	}
-
-	return;
+	return status;
 }
-
 
 void sngisdn_process_rst_cfm (sngisdn_event_data_t *sngisdn_event)
 {
@@ -1174,42 +1175,40 @@ void sngisdn_process_rst_cfm (sngisdn_event_data_t *sngisdn_event)
 	
 	sngisdn_span_data_t	*signal_data = g_sngisdn_data.dchans[dChan].spans[1];
 	if (!signal_data) {
-		ftdm_log(FTDM_LOG_CRIT, "Received RESTART on unconfigured span (suId:%d)\n", suId);
+		ftdm_log(FTDM_LOG_CRIT, "Received RESTART CFM on unconfigured span (suId:%d)\n", suId);
 		return;
 	}
 	
-	if (!rstEvnt->rstInd.eh.pres || !rstEvnt->rstInd.rstClass.pres) {
-		ftdm_log(FTDM_LOG_DEBUG, "Receved RESTART, but Restart Indicator IE not present\n");
-		return;
-	}
-		
-	switch(rstEvnt->rstInd.rstClass.val) {
-		case IN_CL_INDCHAN: /* Indicated b-channel */
-			if (rstEvnt->chanId.eh.pres) {
-				if (rstEvnt->chanId.intType.val == IN_IT_BASIC) {
-					if (rstEvnt->chanId.infoChanSel.pres == PRSNT_NODEF) {
-						chan_no = rstEvnt->chanId.infoChanSel.val;
-					}
-				} else if (rstEvnt->chanId.intType.val == IN_IT_OTHER) {
-					if (rstEvnt->chanId.chanNmbSlotMap.pres == PRSNT_NODEF) {
-						chan_no = rstEvnt->chanId.chanNmbSlotMap.val[0];
+	if (rstEvnt->rstInd.eh.pres == PRSNT_NODEF && rstEvnt->rstInd.rstClass.pres == PRSNT_NODEF) {			
+		switch(rstEvnt->rstInd.rstClass.val) {
+			case IN_CL_INDCHAN: /* Indicated b-channel */
+				if (rstEvnt->chanId.eh.pres) {
+					if (rstEvnt->chanId.intType.val == IN_IT_BASIC) {
+						if (rstEvnt->chanId.infoChanSel.pres == PRSNT_NODEF) {
+							chan_no = rstEvnt->chanId.infoChanSel.val;
+						}
+					} else if (rstEvnt->chanId.intType.val == IN_IT_OTHER) {
+						if (rstEvnt->chanId.chanNmbSlotMap.pres == PRSNT_NODEF) {
+							chan_no = rstEvnt->chanId.chanNmbSlotMap.val[0];
+						}
 					}
 				}
-			}
-			if (!chan_no) {
-				ftdm_log(FTDM_LOG_CRIT, "Failed to determine channel from RESTART\n");
+				if (!chan_no) {
+					ftdm_log(FTDM_LOG_CRIT, "Failed to determine channel from RESTART\n");
+					return;
+				}
+				break;
+			case IN_CL_SNGINT: /* Single interface */
+			case IN_CL_ALLINT: /* All interfaces */
+				/* In case restart class indicates all interfaces, we will duplicate
+				this event on each span associated to this d-channel in sngisdn_rcv_rst_cfm,
+				so treat it as a single interface anyway */
+				chan_no = 0;
+				break;
+			default:
+				ftdm_log(FTDM_LOG_CRIT, "Invalid restart indicator class:%d\n", rstEvnt->rstInd.rstClass.val);
 				return;
-			}
-			break;
-		case IN_CL_SNGINT: /* Single interface */
-		case IN_CL_ALLINT: /* All interfaces */
-			/* In case restart class indicates all interfaces, we will duplicate
-			this event on each span associated to this d-channel in sngisdn_rcv_rst_cfm,
-			so treat it as a single interface anyway */
-			break;
-		default:
-			ftdm_log(FTDM_LOG_CRIT, "Invalid restart indicator class:%d\n", rstEvnt->rstInd.rstClass.val);
-			return;
+		}
 	}
 
 	if (chan_no) { /* For a single channel */
@@ -1217,7 +1216,7 @@ void sngisdn_process_rst_cfm (sngisdn_event_data_t *sngisdn_event)
 			ftdm_log(FTDM_LOG_CRIT, "Received RESTART on invalid channel:%d\n", chan_no);
 		} else {
 			ftdm_channel_t *ftdmchan = ftdm_span_get_channel(signal_data->ftdm_span, chan_no);
-			sngisdn_process_restart_confirm(ftdmchan);
+			sngisdn_bring_down(ftdmchan);
 		}
 	} else { /* for all channels */
 		ftdm_iterator_t *chaniter = NULL;
@@ -1225,7 +1224,7 @@ void sngisdn_process_rst_cfm (sngisdn_event_data_t *sngisdn_event)
 
 		chaniter = ftdm_span_get_chan_iterator(signal_data->ftdm_span, NULL);
 		for (curr = chaniter; curr; curr = ftdm_iterator_next(curr)) {
-			sngisdn_process_restart_confirm((ftdm_channel_t*)ftdm_iterator_current(curr));
+			sngisdn_bring_down((ftdm_channel_t*)ftdm_iterator_current(curr));
 		}
 		ftdm_iterator_free(chaniter);
 	}
@@ -1236,24 +1235,103 @@ void sngisdn_process_rst_cfm (sngisdn_event_data_t *sngisdn_event)
 }
 
 
+/* The remote side sent us a RESTART Msg. Trillium automatically acks with RESTART ACK, but
+	we need to clear our call states if there is a call on this channel */
 void sngisdn_process_rst_ind (sngisdn_event_data_t *sngisdn_event)
 {
+	uint8_t chan_no = 0;
 	int16_t suId = sngisdn_event->suId;
 	int16_t dChan = sngisdn_event->dChan;
 	uint8_t ces = sngisdn_event->ces;
 	uint8_t evntType = sngisdn_event->evntType;
+	Rst *rstEvnt = NULL;
+	sngisdn_span_data_t     *signal_data = NULL;
 
 	ISDN_FUNC_TRACE_ENTER(__FUNCTION__);
 
-	/* Function does not require any info from ssHlEvnt struct for now */
-	/*Rst *rstEvnt = &sngisdn_event->event.rstEvnt;*/
-		
-	ftdm_log(FTDM_LOG_DEBUG, "Processing RESTART CFM (suId:%u dChan:%d ces:%d %s)\n", suId, dChan, ces,
+	rstEvnt = &sngisdn_event->event.rstEvnt;
+
+	/* TODO: readjust this when NFAS is implemented as signal_data will not always be the first
+	 * span for that d-channel */
+
+	signal_data = g_sngisdn_data.dchans[dChan].spans[1];
+
+	if (!signal_data) {
+		ftdm_log(FTDM_LOG_CRIT, "Received RESTART IND on unconfigured span (suId:%d)\n", suId);
+		return;
+	}
+
+	if (signal_data->restart_timeout) {
+		ftdm_sched_cancel_timer(signal_data->sched, signal_data->timers[SNGISDN_SPAN_TIMER_RESTART]);
+	}
+	
+	ftdm_log(FTDM_LOG_DEBUG, "Processing RESTART IND (suId:%u dChan:%d ces:%d %s(%d))\n", suId, dChan, ces,
 													(evntType == IN_LNK_DWN)?"LNK_DOWN":
 													(evntType == IN_LNK_UP)?"LNK_UP":
 													(evntType == IN_INDCHAN)?"b-channel":
 													(evntType == IN_LNK_DWN_DM_RLS)?"NFAS service procedures":
-													(evntType == IN_SWCHD_BU_DCHAN)?"NFAS switchover to backup":"Unknown");
+													(evntType == IN_SWCHD_BU_DCHAN)?"NFAS switchover to backup":"Unknown", evntType);
+
+	if (rstEvnt->rstInd.eh.pres == PRSNT_NODEF && rstEvnt->rstInd.rstClass.pres == PRSNT_NODEF) {
+		switch(rstEvnt->rstInd.rstClass.val) {
+			case IN_CL_INDCHAN: /* Indicated b-channel */
+				if (rstEvnt->chanId.eh.pres) {
+					if (rstEvnt->chanId.intType.val == IN_IT_BASIC) {
+						if (rstEvnt->chanId.infoChanSel.pres == PRSNT_NODEF) {
+							chan_no = rstEvnt->chanId.infoChanSel.val;
+						}
+					} else if (rstEvnt->chanId.intType.val == IN_IT_OTHER) {
+						if (rstEvnt->chanId.chanNmbSlotMap.pres == PRSNT_NODEF) {
+							chan_no = rstEvnt->chanId.chanNmbSlotMap.val[0];
+						}
+					}
+				}
+				if (!chan_no) {
+					ftdm_log(FTDM_LOG_CRIT, "Failed to determine channel from RESTART\n");
+					return;
+				}
+				break;
+			case IN_CL_SNGINT: /* Single interface */
+			case IN_CL_ALLINT: /* All interfaces */
+				/* In case restart class indicates all interfaces, we will duplicate
+						this event on each span associated to this d-channel in sngisdn_rcv_rst_cfm,
+						so treat it as a single interface anyway */
+				chan_no = 0;
+				break;
+			default:
+				ftdm_log(FTDM_LOG_CRIT, "Invalid restart indicator class:%d\n", rstEvnt->rstInd.rstClass.val);
+				return;
+		}
+	}
+
+	if (chan_no) { /* For a single channel */
+		if (chan_no > ftdm_span_get_chan_count(signal_data->ftdm_span)) {
+			ftdm_log(FTDM_LOG_CRIT, "Received RESTART IND on invalid channel:%d\n", chan_no);
+		} else {
+			ftdm_iterator_t *chaniter = NULL;
+			ftdm_iterator_t *curr = NULL;
+			
+			chaniter = ftdm_span_get_chan_iterator(signal_data->ftdm_span, NULL);
+			for (curr = chaniter; curr; curr = ftdm_iterator_next(curr)) {			
+				ftdm_channel_t *ftdmchan = (ftdm_channel_t*)ftdm_iterator_current(curr);
+				if (ftdmchan->physical_chan_id == chan_no) {
+					sngisdn_bring_down(ftdmchan);
+				}
+			}
+			ftdm_iterator_free(chaniter);
+		}
+	} else { /* for all channels */
+		ftdm_iterator_t *chaniter = NULL;
+		ftdm_iterator_t *curr = NULL;
+
+		chaniter = ftdm_span_get_chan_iterator(signal_data->ftdm_span, NULL);
+		for (curr = chaniter; curr; curr = ftdm_iterator_next(curr)) {
+			sngisdn_bring_down((ftdm_channel_t*)ftdm_iterator_current(curr));
+		}
+		ftdm_iterator_free(chaniter);
+	}
+
+	
 	ISDN_FUNC_TRACE_EXIT(__FUNCTION__);
 	return;
 }

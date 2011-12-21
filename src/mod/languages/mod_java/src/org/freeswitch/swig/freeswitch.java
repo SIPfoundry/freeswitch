@@ -9,12 +9,24 @@
 package org.freeswitch.swig;
 
 public class freeswitch {
+  public static void setGlobalVariable(String var_name, String var_val) {
+    freeswitchJNI.setGlobalVariable(var_name, var_val);
+  }
+
+  public static String getGlobalVariable(String var_name) {
+    return freeswitchJNI.getGlobalVariable(var_name);
+  }
+
   public static void consoleLog(String level_str, String msg) {
     freeswitchJNI.consoleLog(level_str, msg);
   }
 
   public static void consoleCleanLog(String msg) {
     freeswitchJNI.consoleCleanLog(msg);
+  }
+
+  public static boolean email(String to, String from, String headers, String body, String file, String convert_cmd, String convert_ext) {
+    return freeswitchJNI.email(to, from, headers, body, file, convert_cmd, convert_ext);
   }
 
   public static void console_log(String level_str, String msg) {

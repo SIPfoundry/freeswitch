@@ -48,13 +48,14 @@ typedef enum {
 	TFLAG_LINKED = (1 << 0),
 	TFLAG_OUTBOUND = (1 << 1),
 	TFLAG_WRITE = (1 << 2),
-	TFLAG_CNG = (1 << 3),
+	TFLAG_USEME = (1 << 3),
 	TFLAG_BRIDGE = (1 << 4),
 	TFLAG_BOWOUT = (1 << 5),
 	TFLAG_BLEG = (1 << 6),
 	TFLAG_APP = (1 << 7),
 	TFLAG_RUNNING_APP = (1 << 8),
-	TFLAG_BOWOUT_USED = (1 << 9)
+	TFLAG_BOWOUT_USED = (1 << 9),
+	TFLAG_CLEAR = (1 << 10)
 } TFLAGS;
 
 struct private_object {
@@ -104,6 +105,17 @@ static switch_call_cause_t channel_outgoing_channel(switch_core_session_t *sessi
 static switch_status_t channel_read_frame(switch_core_session_t *session, switch_frame_t **frame, switch_io_flag_t flags, int stream_id);
 static switch_status_t channel_write_frame(switch_core_session_t *session, switch_frame_t *frame, switch_io_flag_t flags, int stream_id);
 static switch_status_t channel_kill_channel(switch_core_session_t *session, int sig);
+
+
+static void clear_queue(private_t *tech_pvt)
+{
+	void *pop;
+
+	while (switch_queue_trypop(tech_pvt->frame_queue, &pop) == SWITCH_STATUS_SUCCESS && pop) {
+		switch_frame_t *frame = (switch_frame_t *) pop;
+		switch_frame_free(&frame);
+	}
+}
 
 static switch_status_t tech_init(private_t *tech_pvt, switch_core_session_t *session, switch_codec_t *codec)
 {
@@ -158,7 +170,7 @@ static switch_status_t tech_init(private_t *tech_pvt, switch_core_session_t *ses
 
 	tech_pvt->cng_frame.data = tech_pvt->cng_databuf;
 	tech_pvt->cng_frame.buflen = sizeof(tech_pvt->cng_databuf);
-	//switch_set_flag((&tech_pvt->cng_frame), SFF_CNG);
+
 	tech_pvt->cng_frame.datalen = 2;
 
 	tech_pvt->bowout_frame_count = (tech_pvt->read_codec.implementation->actual_samples_per_second /
@@ -297,12 +309,10 @@ static switch_status_t channel_on_init(switch_core_session_t *session)
 static void do_reset(private_t *tech_pvt)
 {
 	switch_clear_flag_locked(tech_pvt, TFLAG_WRITE);
-	switch_set_flag_locked(tech_pvt, TFLAG_CNG);
 
 	switch_mutex_lock(tech_pvt->mutex);
 	if (tech_pvt->other_tech_pvt) {
 		switch_clear_flag_locked(tech_pvt->other_tech_pvt, TFLAG_WRITE);
-		switch_set_flag_locked(tech_pvt->other_tech_pvt, TFLAG_CNG);
 	}
 	switch_mutex_unlock(tech_pvt->mutex);
 }
@@ -446,12 +456,6 @@ static switch_status_t channel_kill_channel(switch_core_session_t *session, int 
 
 	switch (sig) {
 	case SWITCH_SIG_BREAK:
-		switch_set_flag_locked(tech_pvt, TFLAG_CNG);
-		switch_mutex_lock(tech_pvt->mutex);
-		if (tech_pvt->other_tech_pvt) {
-			switch_set_flag_locked(tech_pvt->other_tech_pvt, TFLAG_CNG);
-		}
-		switch_mutex_unlock(tech_pvt->mutex);
 		break;
 	case SWITCH_SIG_KILL:
 		switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
@@ -574,6 +578,12 @@ static switch_status_t channel_read_frame(switch_core_session_t *session, switch
 	mutex = tech_pvt->mutex;
 	switch_mutex_lock(mutex);
 
+
+	if (switch_test_flag(tech_pvt, TFLAG_CLEAR)) {
+		clear_queue(tech_pvt);
+		switch_clear_flag(tech_pvt, TFLAG_CLEAR);
+	}
+
 	if (switch_queue_trypop(tech_pvt->frame_queue, &pop) == SWITCH_STATUS_SUCCESS && pop) {
 		if (tech_pvt->write_frame) {
 			switch_frame_free(&tech_pvt->write_frame);
@@ -583,18 +593,12 @@ static switch_status_t channel_read_frame(switch_core_session_t *session, switch
 		tech_pvt->write_frame->codec = &tech_pvt->read_codec;
 		*frame = tech_pvt->write_frame;
 		tech_pvt->packet_count++;
-		switch_clear_flag_locked(tech_pvt, TFLAG_CNG);
 		switch_clear_flag(tech_pvt->write_frame, SFF_CNG);
 	} else {
-		switch_set_flag(tech_pvt, TFLAG_CNG);
-	}
-
-	if (switch_test_flag(tech_pvt, TFLAG_CNG)) {
 		*frame = &tech_pvt->cng_frame;
 		tech_pvt->cng_frame.codec = &tech_pvt->read_codec;
 		tech_pvt->cng_frame.datalen = tech_pvt->read_codec.implementation->decoded_bytes_per_packet;
 		switch_set_flag((&tech_pvt->cng_frame), SFF_CNG);
-		switch_clear_flag_locked(tech_pvt, TFLAG_CNG);
 	}
 
 
@@ -626,7 +630,7 @@ static switch_status_t channel_write_frame(switch_core_session_t *session, switc
 	switch_assert(tech_pvt != NULL);
 
 	if (switch_test_flag(frame, SFF_CNG) || 
-		switch_test_flag(tech_pvt, TFLAG_CNG) || (switch_test_flag(tech_pvt, TFLAG_BOWOUT) && switch_test_flag(tech_pvt, TFLAG_BOWOUT_USED))) {
+		(switch_test_flag(tech_pvt, TFLAG_BOWOUT) && switch_test_flag(tech_pvt, TFLAG_BOWOUT_USED))) {
 		switch_core_timer_sync(&tech_pvt->timer);
 		switch_core_timer_sync(&tech_pvt->other_tech_pvt->timer);
 		return SWITCH_STATUS_SUCCESS;
@@ -672,23 +676,27 @@ static switch_status_t channel_write_frame(switch_core_session_t *session, switc
 
 	if (switch_test_flag(tech_pvt, TFLAG_LINKED) && tech_pvt->other_tech_pvt) {
 		switch_frame_t *clone;
-
+		
 		if (frame->codec->implementation != tech_pvt->write_codec.implementation) {
 			/* change codecs to match */
 			tech_init(tech_pvt, session, frame->codec);
 			tech_init(tech_pvt->other_tech_pvt, tech_pvt->other_session, frame->codec);
 		}
 
-		if (switch_queue_size(tech_pvt->other_tech_pvt->frame_queue) < FRAME_QUEUE_LEN) {
-			if (switch_frame_dup(frame, &clone) != SWITCH_STATUS_SUCCESS) {
-				abort();
-			}
 
-			if (switch_queue_trypush(tech_pvt->other_tech_pvt->frame_queue, clone) != SWITCH_STATUS_SUCCESS) {
-				switch_frame_free(&clone);
-			}
+		if (switch_frame_dup(frame, &clone) != SWITCH_STATUS_SUCCESS) {
+			abort();
+		}
+		
+		if ((status = switch_queue_trypush(tech_pvt->other_tech_pvt->frame_queue, clone)) != SWITCH_STATUS_SUCCESS) { 
+			clear_queue(tech_pvt->other_tech_pvt);
+			status = switch_queue_trypush(tech_pvt->other_tech_pvt->frame_queue, clone);
+		}
 
+		if (status == SWITCH_STATUS_SUCCESS) {
 			switch_set_flag_locked(tech_pvt->other_tech_pvt, TFLAG_WRITE);
+		} else {
+			switch_frame_free(&clone);
 		}
 
 		status = SWITCH_STATUS_SUCCESS;
@@ -747,22 +755,13 @@ static switch_status_t channel_receive_message(switch_core_session_t *session, s
 	case SWITCH_MESSAGE_INDICATE_UNBRIDGE:
 	case SWITCH_MESSAGE_INDICATE_AUDIO_SYNC:
 		{
-			void *pop;
 
 			done = 1;
-
-			while (switch_queue_trypop(tech_pvt->frame_queue, &pop) == SWITCH_STATUS_SUCCESS && pop) {
-				switch_frame_t *frame = (switch_frame_t *) pop;
-				switch_frame_free(&frame);
-			}
-
-			while (switch_queue_trypop(tech_pvt->other_tech_pvt->frame_queue, &pop) == SWITCH_STATUS_SUCCESS && pop) {
-				switch_frame_t *frame = (switch_frame_t *) pop;
-				switch_frame_free(&frame);
-			}
+			switch_set_flag(tech_pvt, TFLAG_CLEAR);
+			switch_set_flag(tech_pvt->other_tech_pvt, TFLAG_CLEAR);
 
 			switch_core_timer_sync(&tech_pvt->timer);
-
+			switch_core_timer_sync(&tech_pvt->other_tech_pvt->timer);
 		}
 		break;
 	default:
@@ -803,15 +802,20 @@ static switch_status_t loopback_bowout_on_execute_state_handler(switch_core_sess
 		switch_core_session_read_lock(tech_pvt->other_session);
 		b_channel = switch_core_session_get_channel(tech_pvt->other_session);
 
+		/* Wait for b_channel to be fully bridged */
+		switch_channel_wait_for_flag(b_channel, CF_BRIDGED, SWITCH_TRUE, 5000, NULL);
+
 		uuid = switch_channel_get_variable(b_channel, SWITCH_SIGNAL_BOND_VARIABLE);
 
 		if (uuid && (other_session = switch_core_session_locate(uuid))) {
 			switch_channel_t *other_channel = switch_core_session_get_channel(other_session);
 			switch_caller_profile_t *cp, *clone;
-			
+
+			switch_channel_wait_for_state(other_channel, NULL, CS_EXCHANGE_MEDIA);
+
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->other_session), SWITCH_LOG_INFO, "Replacing loopback channel: %s with real channel: %s\n",
 							  switch_channel_get_name(b_channel), switch_channel_get_name(other_channel));
-			
+
 			if ((cp = switch_channel_get_caller_profile(channel))) {
 				clone = switch_caller_profile_clone(other_session, cp);
 				clone->originator_caller_profile = NULL;
@@ -832,7 +836,7 @@ static switch_status_t loopback_bowout_on_execute_state_handler(switch_core_sess
 		switch_core_session_rwunlock(tech_pvt->other_session);
 
 		switch_core_event_hook_remove_state_change(session, loopback_bowout_on_execute_state_handler);
-		
+
 	}
 	return SWITCH_STATUS_SUCCESS;
 }

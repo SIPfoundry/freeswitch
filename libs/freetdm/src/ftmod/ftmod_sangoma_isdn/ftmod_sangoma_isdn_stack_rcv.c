@@ -168,7 +168,8 @@ void sngisdn_rcv_cnst_ind (int16_t suId, uint32_t suInstId, uint32_t spInstId, C
 													(evntType == MI_CALLPROC)?"PROCEED":
 													(evntType == MI_PROGRESS)?"PROGRESS":
 													(evntType == MI_SETUPACK)?"SETUP ACK":
-															(evntType == MI_INFO)?"INFO":"UNKNOWN",
+													(evntType == MI_NOTIFY)?"NOTIFY":
+													(evntType == MI_INFO)?"INFO":"UNKNOWN",
 															suId, suInstId, spInstId, ces);
 
 	sngisdn_event = ftdm_malloc(sizeof(*sngisdn_event));
@@ -502,12 +503,16 @@ void sngisdn_rcv_sta_cfm (int16_t suId, uint32_t suInstId, uint32_t spInstId, St
 	sngisdn_event_data_t *sngisdn_event = NULL;
 
 	ISDN_FUNC_TRACE_ENTER(__FUNCTION__);
-	
+
+	/* We sometimes receive a STA CFM after receiving a RELEASE/RELEASE COMPLETE, so we need to lock
+		here in case we are calling clear_call_data at the same time this function is called */
+
+	ftdm_mutex_lock(g_sngisdn_data.ccs[suId].mutex);	
 	if (!(spInstId && get_ftdmchan_by_spInstId(suId, spInstId, &sngisdn_info) == FTDM_SUCCESS) &&
 		!(suInstId && get_ftdmchan_by_suInstId(suId, suInstId, &sngisdn_info) == FTDM_SUCCESS)) {
 
 		ftdm_log(FTDM_LOG_CRIT, "Could not find matching call suId:%u suInstId:%u spInstId:%u\n", suId, suInstId, spInstId);
-		ftdm_assert(0, "Inconsistent call states\n");
+		ftdm_mutex_unlock(g_sngisdn_data.ccs[suId].mutex);
 		return;
 	}
 
@@ -526,6 +531,7 @@ void sngisdn_rcv_sta_cfm (int16_t suId, uint32_t suInstId, uint32_t spInstId, St
 	memcpy(&sngisdn_event->event.staEvnt, staEvnt, sizeof(*staEvnt));
 
  	ftdm_queue_enqueue(((sngisdn_span_data_t*)sngisdn_info->ftdmchan->span->signal_data)->event_queue, sngisdn_event);
+	ftdm_mutex_unlock(g_sngisdn_data.ccs[suId].mutex);
 	ISDN_FUNC_TRACE_EXIT(__FUNCTION__);
 }
 
@@ -677,20 +683,20 @@ void sngisdn_rcv_q921_ind(BdMngmt *status)
 	}
 
 	switch (status->t.usta.alarm.category) {
-		case (LCM_CATEGORY_INTERFACE):
-			ftdm_log(FTDM_LOG_INFO, "[SNGISDN Q921] %s: %s: %s(%d): %s(%d)\n",
-							ftdmspan->name,
-							DECODE_LCM_CATEGORY(status->t.usta.alarm.category),
-							DECODE_LCM_EVENT(status->t.usta.alarm.event), status->t.usta.alarm.event,
-							DECODE_LCM_CAUSE(status->t.usta.alarm.cause), status->t.usta.alarm.cause);
+		case (LCM_CATEGORY_PROTOCOL):
+			ftdm_log(FTDM_LOG_DEBUG, "[SNGISDN Q921] %s: %s: %s(%d): %s(%d)\n",
+						ftdmspan->name,
+						DECODE_LCM_CATEGORY(status->t.usta.alarm.category),
+						DECODE_LLD_EVENT(status->t.usta.alarm.event), status->t.usta.alarm.event,
+						DECODE_LLD_CAUSE(status->t.usta.alarm.cause), status->t.usta.alarm.cause);
 			break;
 		default:
 			ftdm_log(FTDM_LOG_INFO, "[SNGISDN Q921] %s: %s: %s(%d): %s(%d)\n",
-					ftdmspan->name,
-					DECODE_LCM_CATEGORY(status->t.usta.alarm.category),
-					DECODE_LLD_EVENT(status->t.usta.alarm.event), status->t.usta.alarm.event,
-					DECODE_LLD_CAUSE(status->t.usta.alarm.cause), status->t.usta.alarm.cause);
-
+						ftdmspan->name,
+						DECODE_LCM_CATEGORY(status->t.usta.alarm.category),
+						DECODE_LLD_EVENT(status->t.usta.alarm.event), status->t.usta.alarm.event,
+						DECODE_LLD_CAUSE(status->t.usta.alarm.cause), status->t.usta.alarm.cause);
+			
 			switch (status->t.usta.alarm.event) {
 				case ENTR_CONG: /* Entering Congestion */
 					ftdm_log(FTDM_LOG_WARNING, "s%d: Entering Congestion\n", ftdmspan->span_id);
@@ -707,10 +713,12 @@ void sngisdn_rcv_q921_ind(BdMngmt *status)
 }
 void sngisdn_rcv_q931_ind(InMngmt *status)
 {	
+#ifndef WIN32
 	if (status->t.usta.alarm.cause == 287) {
-		get_memory_info();
+		sngisdn_get_memory_info();
 		return;
 	}
+#endif
 
 	switch (status->t.usta.alarm.event) {
 		case LCM_EVENT_UP:
@@ -779,7 +787,6 @@ void sngisdn_rcv_cc_ind(CcMngmt *status)
 void sngisdn_rcv_q931_trace(InMngmt *trc, Buffer *mBuf)
 {
 	MsgLen mlen;
-	MsgLen i;
 	int16_t j;
 	Buffer *tmp;
 	Data *cptr;
@@ -802,7 +809,6 @@ void sngisdn_rcv_q931_trace(InMngmt *trc, Buffer *mBuf)
 		tmp = mBuf->b_cont;
 		cptr = tmp->b_rptr;
 		data = *cptr++;
-		i = 0;
 
 		for(j=0;j<mlen;j++) {
 			tdata[j]= data;
@@ -898,6 +904,17 @@ int16_t sngisdn_rcv_l1_data_req(uint16_t spId, sng_l1_frame_t *l1_frame)
 		
 		
 		if ((flags & FTDM_WRITE)) {
+#if 0
+			int i;
+			char string [2000];
+			unsigned string_len = 0;
+			for (i = 0; i < length; i++) {
+				string_len += sprintf(&string[string_len], "0x%02x ", l1_frame->data[i]);
+			}
+
+			ftdm_log_chan(signal_data->dchan, FTDM_LOG_CRIT, "\nL1 TX [%s]\n", string);
+#endif
+			
 			status = signal_data->dchan->fio->write(signal_data->dchan, l1_frame->data, (ftdm_size_t*)&length);
 			if (status != FTDM_SUCCESS) {
 				ftdm_log_chan_msg(signal_data->dchan, FTDM_LOG_CRIT, "Failed to transmit frame\n");

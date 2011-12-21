@@ -56,6 +56,15 @@
 #include <switch.h>
 
 SWITCH_BEGIN_EXTERN_C
+
+typedef struct profile_node_s {
+	char *var;
+	char *val;
+	struct profile_node_s *next;
+} profile_node_t;
+
+
+
 /*! \brief Call Specific Data
  */
 	struct switch_caller_profile {
@@ -110,6 +119,10 @@ SWITCH_BEGIN_EXTERN_C
 	switch_memory_pool_t *pool;
 	struct switch_caller_profile *next;
 	switch_call_direction_t direction;
+	profile_node_t *soft;
+	char *uuid_str;
+	char *clone_of;
+	char *transfer_source;
 };
 
 /*! \brief An Abstract Representation of a dialplan Application */

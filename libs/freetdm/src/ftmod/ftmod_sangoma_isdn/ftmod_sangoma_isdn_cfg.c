@@ -285,7 +285,10 @@ ftdm_status_t ftmod_isdn_parse_cfg(ftdm_conf_parameter_t *ftdm_parameters, ftdm_
 	signal_data->timer_t3 = 8;
 	signal_data->restart_opt = SNGISDN_OPT_DEFAULT;
 	signal_data->link_id = span->span_id;
-	
+	signal_data->transfer_timeout = 20000;
+	signal_data->att_remove_dtmf = SNGISDN_OPT_DEFAULT;
+	signal_data->force_sending_complete = SNGISDN_OPT_DEFAULT;
+
 	span->default_caller_data.dnis.plan = FTDM_NPI_INVALID;
 	span->default_caller_data.dnis.type = FTDM_TON_INVALID;
 	span->default_caller_data.cid_num.plan = FTDM_NPI_INVALID;
@@ -333,7 +336,8 @@ ftdm_status_t ftmod_isdn_parse_cfg(ftdm_conf_parameter_t *ftdm_parameters, ftdm_
 			parse_yesno(var, val, &signal_data->setup_arb);
 		} else if (!strcasecmp(var, "facility")) {
 			parse_yesno(var, val, &signal_data->facility);
-		} else if (!strcasecmp(var, "min_digits")) {
+		} else if (!strcasecmp(var, "min-digits") ||
+					!strcasecmp(var, "min_digits")) {
 			signal_data->min_digits = atoi(val);
 		} else if (!strcasecmp(var, "outbound-called-ton")) {
 			ftdm_set_ton(val, &span->default_caller_data.dnis.type);
@@ -347,14 +351,16 @@ ftdm_status_t ftmod_isdn_parse_cfg(ftdm_conf_parameter_t *ftdm_parameters, ftdm_
 			ftdm_set_ton(val, &span->default_caller_data.rdnis.type);
 		} else if (!strcasecmp(var, "outbound-rdnis-npi")) {
 			ftdm_set_npi(val, &span->default_caller_data.rdnis.plan);
-		} else if (!strcasecmp(var, "outbound-bearer_cap") ||
-					!strcasecmp(var, "outbound-bc-transfer-cap")) {
+		} else if (!strcasecmp(var, "outbound-bc-transfer-cap") ||
+					!strcasecmp(var, "outbound-bearer_cap")) {
 			ftdm_set_bearer_capability(val, (uint8_t*)&span->default_caller_data.bearer_capability);
-		} else if (!strcasecmp(var, "outbound-bearer_layer1") ||
-					!strcasecmp(var, "outbound-bc-user-layer1")) {
+		} else if (!strcasecmp(var, "outbound-bc-user-layer1") ||
+					!strcasecmp(var, "outbound-bearer_layer1")) {
 			ftdm_set_bearer_layer1(val, (uint8_t*)&span->default_caller_data.bearer_layer1);
 		} else if (!strcasecmp(var, "channel-restart-on-link-up")) {
 			parse_yesno(var, val, &signal_data->restart_opt);
+		} else if (!strcasecmp(var, "channel-restart-timeout")) {
+			signal_data->restart_timeout = atoi(val);
 		} else if (!strcasecmp(var, "local-number")) {			
 			if (add_local_number(val, span) != FTDM_SUCCESS) {
 				return FTDM_FAIL;
@@ -364,18 +370,37 @@ ftdm_status_t ftmod_isdn_parse_cfg(ftdm_conf_parameter_t *ftdm_parameters, ftdm_
 			if (signal_data->facility_timeout < 0) {
 				signal_data->facility_timeout = 0;
 			}
+		} else if (!strcasecmp(var, "transfer-timeout")) {
+			signal_data->transfer_timeout = atoi(val);
+			if (signal_data->transfer_timeout < 0) {
+				signal_data->transfer_timeout = 0;
+			}
+		} else if (!strcasecmp(var, "att-remove-dtmf")) {
+			parse_yesno(var, val, &signal_data->att_remove_dtmf);
 		} else if (!strcasecmp(var, "facility-ie-decode")) {
 			parse_yesno(var, val, &signal_data->facility_ie_decode);
 		} else if (!strcasecmp(var, "ignore-cause-value")) {
 			parse_yesno(var, val, &signal_data->ignore_cause_value);
+		} else if (!strcasecmp(var, "q931-trace")) {
+			parse_yesno(var, val, &signal_data->trace_q931);
+		} else if (!strcasecmp(var, "q921-trace")) {
+			parse_yesno(var, val, &signal_data->trace_q921);
 		} else if (!strcasecmp(var, "q931-raw-trace")) {
 			parse_yesno(var, val, &signal_data->raw_trace_q931);
 		} else if (!strcasecmp(var, "q921-raw-trace")) {
 			parse_yesno(var, val, &signal_data->raw_trace_q921);
+		} else if (!strcasecmp(var, "force-sending-complete")) {
+			parse_yesno(var, val, &signal_data->force_sending_complete);
 		} else if (!strcasecmp(var, "early-media-override")) {
 			if (parse_early_media(val, span) != FTDM_SUCCESS) {
 				return FTDM_FAIL;
 			}
+		} else if (!strcasecmp(var, "chan-id-invert-extend-bit")) {
+#ifdef SANGOMA_ISDN_CHAN_ID_INVERT_BIT
+			parse_yesno(var, val, &g_sngisdn_data.chan_id_invert_extend_bit);
+#else
+			ftdm_log(FTDM_LOG_WARNING, "chan-id-invert-extend-bit is not supported in your version of libsng_isdn\n");
+#endif
 		} else {
 			ftdm_log(FTDM_LOG_WARNING, "Ignoring unknown parameter %s\n", ftdm_parameters[paramindex].var);
 		}

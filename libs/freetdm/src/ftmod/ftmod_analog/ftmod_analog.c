@@ -182,7 +182,7 @@ static FIO_SIG_CONFIGURE_FUNCTION(ftdm_analog_configure_span)
 	const char *tonemap = "us";
 	const char *hotline = "";
 	uint32_t digit_timeout = 10;
-	uint32_t wait_dialtone_timeout = 30000;
+	uint32_t wait_dialtone_timeout = 5000;
 	uint32_t max_dialstr = MAX_DTMF;
 	uint32_t polarity_delay = 600;
 	const char *var, *val;
@@ -226,7 +226,7 @@ static FIO_SIG_CONFIGURE_FUNCTION(ftdm_analog_configure_span)
 			if (wait_dialtone_timeout < 0) {
 				wait_dialtone_timeout = 0;
 			}
-			ftdm_log_chan(span->channels[i], FTDM_LOG_DEBUG, "Wait dial tone ms = %d\n", wait_dialtone_timeout);
+			ftdm_log(FTDM_LOG_DEBUG, "Wait dial tone ms = %d\n", wait_dialtone_timeout);
 		} else if (!strcasecmp(var, "enable_callerid")) {
 			if (!(val = va_arg(ap, char *))) {
                 		break;
@@ -275,6 +275,15 @@ static FIO_SIG_CONFIGURE_FUNCTION(ftdm_analog_configure_span)
 				break;
 			}
 			hotline = val;
+		} else if (!strcasecmp(var, "polarity_callerid")) {
+			if (!(val = va_arg(ap, char *))) {
+				break;
+			}
+			if (ftdm_true(val)) {
+				flags |= FTDM_ANALOG_POLARITY_CALLERID;
+			} else {
+				flags &= ~FTDM_ANALOG_POLARITY_CALLERID;
+			}
 		} else {
 			ftdm_log(FTDM_LOG_ERROR, "Unknown parameter %s in span %s\n", var, span->name);
 		}			
@@ -401,7 +410,7 @@ static void analog_dial(ftdm_channel_t *ftdmchan, uint32_t *state_counter, uint3
 			ftdmchan->needed_tones[FTDM_TONEMAP_FAIL1] = 1;
 			ftdmchan->needed_tones[FTDM_TONEMAP_FAIL2] = 1;
 			ftdmchan->needed_tones[FTDM_TONEMAP_FAIL3] = 1;
-			*dial_timeout = ((ftdmchan->dtmf_on + ftdmchan->dtmf_off) * strlen(ftdmchan->caller_data.dnis.digits)) + 2000;
+			*dial_timeout = (uint32_t)((ftdmchan->dtmf_on + ftdmchan->dtmf_off) * strlen(ftdmchan->caller_data.dnis.digits)) + 2000;
 		}
 	}
 }
@@ -426,7 +435,6 @@ static void *ftdm_analog_channel_run(ftdm_thread_t *me, void *obj)
 	uint32_t state_counter = 0, elapsed = 0, collecting = 0, interval = 0, last_digit = 0, indicate = 0, dial_timeout = analog_data->wait_dialtone_timeout;
 	uint32_t answer_on_polarity_counter = 0;
 	ftdm_sigmsg_t sig;
-	ftdm_status_t status;
 	
 	ftdm_log_chan_msg(ftdmchan, FTDM_LOG_DEBUG, "ANALOG CHANNEL thread starting.\n");
 
@@ -916,7 +924,7 @@ static void *ftdm_analog_channel_run(ftdm_thread_t *me, void *obj)
 			}
 
 			if (codec_func) {
-				status = codec_func(frame, sizeof(frame), &rlen);
+				codec_func(frame, sizeof(frame), &rlen);
 			} else {
 				snprintf(ftdmchan->last_error, sizeof(ftdmchan->last_error), "codec error!");
 				goto done;
@@ -933,6 +941,7 @@ static void *ftdm_analog_channel_run(ftdm_thread_t *me, void *obj)
 	ftdm_channel_lock(closed_chan);
 
 	if (ftdmchan->type == FTDM_CHAN_TYPE_FXO && ftdm_test_flag(ftdmchan, FTDM_CHANNEL_OFFHOOK)) {
+		ftdm_log_chan_msg(ftdmchan, FTDM_LOG_DEBUG, "Going onhook");
 		ftdm_channel_command(ftdmchan, FTDM_COMMAND_ONHOOK, NULL);
 	}
 
@@ -1130,8 +1139,18 @@ static __inline__ ftdm_status_t process_event(ftdm_span_t *span, ftdm_event_t *e
 				break;
 			}
 			if (event->channel->state == FTDM_CHANNEL_STATE_DOWN) {
-				ftdm_log_chan_msg(event->channel, FTDM_LOG_DEBUG, 
-					"Ignoring polarity reversal because this channel is down\n");
+				if (ftdm_test_flag(analog_data, FTDM_ANALOG_CALLERID) 
+				    && ftdm_test_flag(analog_data, FTDM_ANALOG_POLARITY_CALLERID)) {
+					ftdm_log_chan_msg(event->channel, FTDM_LOG_DEBUG, "Polarity reversal detected while down, getting caller id now\n");
+					ftdm_set_state(event->channel, FTDM_CHANNEL_STATE_GET_CALLERID);
+					event->channel->ring_count = 1;
+					ftdm_mutex_unlock(event->channel->mutex);
+					locked = 0;
+					ftdm_thread_create_detached(ftdm_analog_channel_run, event->channel);
+				} else {
+					ftdm_log_chan_msg(event->channel, FTDM_LOG_DEBUG, 
+						"Ignoring polarity reversal because this channel is down\n");
+				}
 				break;
 			}
 			/* we have a good channel, set the polarity flag and let the channel thread deal with it */

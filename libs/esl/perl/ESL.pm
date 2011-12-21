@@ -88,6 +88,8 @@ sub DESTROY {
 *getType = *ESLc::ESLevent_getType;
 *addBody = *ESLc::ESLevent_addBody;
 *addHeader = *ESLc::ESLevent_addHeader;
+*pushHeader = *ESLc::ESLevent_pushHeader;
+*unshiftHeader = *ESLc::ESLevent_unshiftHeader;
 *delHeader = *ESLc::ESLevent_delHeader;
 *firstHeader = *ESLc::ESLevent_firstHeader;
 *nextHeader = *ESLc::ESLevent_nextHeader;
@@ -136,6 +138,7 @@ sub DESTROY {
 *api = *ESLc::ESLconnection_api;
 *bgapi = *ESLc::ESLconnection_bgapi;
 *sendEvent = *ESLc::ESLconnection_sendEvent;
+*sendMSG = *ESLc::ESLconnection_sendMSG;
 *recvEvent = *ESLc::ESLconnection_recvEvent;
 *recvEventTimed = *ESLc::ESLconnection_recvEventTimed;
 *filter = *ESLc::ESLconnection_filter;

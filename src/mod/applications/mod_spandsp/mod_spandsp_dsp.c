@@ -52,11 +52,12 @@ static void spandsp_dtmf_rx_realtime_callback(void *user_data, int code, int lev
 	if (digit) {
 		/* prevent duplicate DTMF */
 		if (digit != pvt->last_digit || (pvt->samples - pvt->last_digit_end) > pvt->min_dup_digit_spacing) {
-			switch_dtmf_t dtmf;
+			switch_dtmf_t dtmf = {0};
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(pvt->session), SWITCH_LOG_DEBUG, "DTMF BEGIN DETECTED: [%c]\n", digit);
 			pvt->last_digit = digit;
 			dtmf.digit = digit;
 			dtmf.duration = switch_core_default_dtmf_duration(0);
+			dtmf.source = SWITCH_DTMF_INBAND_AUDIO;
 			switch_channel_queue_dtmf(switch_core_session_get_channel(pvt->session), &dtmf);
 			pvt->digit_begin = pvt->samples;
 		} else {
@@ -173,7 +174,7 @@ static globals_t globals;
  */
 
 #define MAX_TONES 32
-
+#define STRLEN 128
 /**
  * Tone descriptor
  *
@@ -187,7 +188,9 @@ struct tone_descriptor {
 	super_tone_rx_descriptor_t *spandsp_tone_descriptor;
 
 	/** The mapping of tone id to key */
-	const char *tone_keys[MAX_TONES];
+	char tone_keys[MAX_TONES][STRLEN];
+    int idx;
+
 };
 typedef struct tone_descriptor tone_descriptor_t;
 
@@ -256,7 +259,11 @@ static int tone_descriptor_add_tone(tone_descriptor_t *descriptor, const char *k
 	if (id >= MAX_TONES) {
 		return -1;
 	}
-	descriptor->tone_keys[id] = key; 
+	switch_set_string(descriptor->tone_keys[id], key);
+
+    if (id > descriptor->idx) {
+        descriptor->idx = id;
+    }
 
 	return id;
 }
@@ -358,7 +365,8 @@ static switch_bool_t tone_detector_process_buffer(tone_detector_t *detector, voi
 {
 	detector->detected_tone = -1;
 	super_tone_rx(detector->spandsp_detector, data, len);
-	if (detector->detected_tone != -1) {
+
+	if (detector->detected_tone > -1 && detector->detected_tone <= detector->descriptor->idx && detector->detected_tone < MAX_TONES) {
 		*key = detector->descriptor->tone_keys[detector->detected_tone];
 		return SWITCH_TRUE;
 	}

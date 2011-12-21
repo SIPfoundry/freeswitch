@@ -114,7 +114,7 @@ void sngisdn_trace_interpreted_q921(sngisdn_span_data_t *signal_data, ftdm_trace
 {
 	char *data_str = ftdm_calloc(1,200); /* TODO Find a proper size */
  	sngisdn_decode_q921(data_str, data, data_len);
-	ftdm_log(FTDM_LOG_INFO, "[SNGISDN Q921] s%d FRAME %s:%s\n", signal_data->ftdm_span->name, ftdm_trace_dir2str(dir), data_str);
+	ftdm_log(FTDM_LOG_DEBUG, "[SNGISDN Q921] %s FRAME %s:\n%s\n", signal_data->ftdm_span->name, ftdm_trace_dir2str(dir), data_str);
 	ftdm_safe_free(data_str);
 }
 
@@ -139,13 +139,12 @@ void sngisdn_trace_raw_q921(sngisdn_span_data_t *signal_data, ftdm_trace_dir_t d
 	memcpy(raw_data, data, data_len);
 	sigev.raw.data = raw_data;
 	sigev.raw.len = data_len;
-	sigev.raw.autofree = 1;
 	ftdm_span_send_signal(signal_data->ftdm_span, &sigev);
 }
 
 void sngisdn_decode_q921(char* str, uint8_t* data, uint32_t data_len)
 {
-	int str_len;
+	uint32_t str_len;
 	uint32_t i;
 	uint8_t sapi, cr, ea, tei, ns, nr, pf, p, cmd;
 	uint8_t frame_format = 0;
@@ -212,6 +211,8 @@ void sngisdn_decode_q921(char* str, uint8_t* data, uint32_t data_len)
 				break;
 		}
 	}
+
+	print_hex_dump(str, &str_len, (uint8_t*) data, 0, data_len);
 	return;
 }
 
@@ -220,7 +221,7 @@ void sngisdn_trace_interpreted_q931(sngisdn_span_data_t *signal_data, ftdm_trace
 {
 	char *data_str = ftdm_calloc(1,MAX_DECODE_STR_LEN); /* TODO Find a proper size */
 	sngisdn_decode_q931(data_str, data, data_len);
-	ftdm_log(FTDM_LOG_INFO, "[SNGISDN Q931] %s FRAME %s:%s\n", signal_data->ftdm_span->name, ftdm_trace_dir2str(dir), data_str);
+	ftdm_log(FTDM_LOG_DEBUG, "[SNGISDN Q931] %s FRAME %s:\n%s\n", signal_data->ftdm_span->name, ftdm_trace_dir2str(dir), data_str);
 	ftdm_safe_free(data_str);
 }
 
@@ -241,6 +242,11 @@ void sngisdn_trace_raw_q931(sngisdn_span_data_t *signal_data, ftdm_trace_dir_t d
 			sigev.span_id = ftdmchan->physical_span_id;
 			sigev.chan_id = ftdmchan->physical_chan_id;
 			sigev.channel = ftdmchan;
+		} else {
+			/* We could not map the channel, but at least set the span */
+			if (signal_data->ftdm_span->channels[1]) {
+				sigev.span_id = signal_data->ftdm_span->channels[1]->physical_span_id;
+			}
 		}
 		sigev.event_id = FTDM_SIGEVENT_TRACE_RAW;
 
@@ -253,7 +259,6 @@ void sngisdn_trace_raw_q931(sngisdn_span_data_t *signal_data, ftdm_trace_dir_t d
 		memcpy(raw_data, data, data_len);
 		sigev.raw.data = raw_data;
 		sigev.raw.len = data_len;
-		sigev.raw.autofree = 1;
 		ftdm_span_send_signal(signal_data->ftdm_span, &sigev);
 	}
 }
@@ -331,11 +336,12 @@ uint32_t sngisdn_decode_ie(char *str, uint32_t *str_len, uint8_t current_codeset
 	switch(ieId) {
 		case PROT_Q931_IE_BEARER_CAP:
 			{
-				uint8_t codingStandard, infTransferCap, transferMode, infTransferRate, usrL1Prot;
+				uint8_t codingStandard, infTransferCap, infTransferRate, usrL1Prot;
+				/*uint8_t transferMode;*/
 				
 				codingStandard = get_bits(OCTET(3),6,7);
 				infTransferCap = get_bits(OCTET(3),1,5);
-				transferMode = get_bits(OCTET(4),6,7);
+				/*transferMode = get_bits(OCTET(4),6,7);*/
 				infTransferRate = get_bits(OCTET(4),1,5);
 				usrL1Prot = get_bits(OCTET(5),1,5);
 				
@@ -401,8 +407,9 @@ uint32_t sngisdn_decode_ie(char *str, uint32_t *str_len, uint8_t current_codeset
 				uint8_t infoChannelSelection=0;
 				uint8_t prefExclusive=0;
 				uint8_t ifaceIdPresent=0;
-				uint8_t ifaceIdentifier = 0; /* octet_3_1 */
-				uint8_t chanType=0, numberMap=0, codingStandard=0;
+				/* uint8_t ifaceIdentifier = 0; */ /* octet_3_1 */
+				uint8_t chanType=0, numberMap=0;
+				/* uint8_t codingStandard=0; */
 				uint8_t channelNo = 0;
 				
 				infoChannelSelection = get_bits(OCTET(3),1,2);
@@ -410,15 +417,15 @@ uint32_t sngisdn_decode_ie(char *str, uint32_t *str_len, uint8_t current_codeset
 				ifaceIdPresent = get_bits(OCTET(3),7,7);
 	
 				if (ifaceIdPresent) {
-					ifaceIdentifier= get_bits(OCTET(4),1,7);
+					/*ifaceIdentifier= get_bits(OCTET(4),1,7);*/
 					chanType = get_bits(OCTET(5),1,4);
 					numberMap = get_bits(OCTET(5),5,5);
-					codingStandard = get_bits(OCTET(5),6,7);
+					/*codingStandard = get_bits(OCTET(5),6,7);*/
 					channelNo = get_bits(OCTET(6),1,7);
 				} else {
 					chanType = get_bits(OCTET(4),1,4);
 					numberMap = get_bits(OCTET(4),5,5);
-					codingStandard = get_bits(OCTET(4),6,7);
+					/*codingStandard = get_bits(OCTET(4),6,7);*/
 					channelNo = get_bits(OCTET(5),1,7);
 				}
 				
@@ -579,11 +586,20 @@ uint32_t sngisdn_decode_ie(char *str, uint32_t *str_len, uint8_t current_codeset
 			break;
 		case PROT_Q931_IE_DISPLAY:
 			{
-				uint8_t displayStrOct=2, j;
+				uint8_t j;
 				char displayStr[82];
+				uint8_t displayNtEnabled = 0;
+				uint8_t displayStrOct = 2;
+				uint8_t displayType = 0;
+				uint8_t assocInfo = 0;
+				
 				memset(displayStr, 0, sizeof(displayStr));
 				
 				if(get_bits(OCTET(3),8,8)) {
+					displayType = get_bits(OCTET(3),1,4);
+					assocInfo = get_bits(OCTET(3),5,7);
+
+					displayNtEnabled = 1;
 					displayStrOct++;
 				}
 				j = 0;	
@@ -594,8 +610,15 @@ uint32_t sngisdn_decode_ie(char *str, uint32_t *str_len, uint8_t current_codeset
 					displayStr[j++]=ia5[get_bits(OCTET(displayStrOct),1,4)][get_bits(OCTET(displayStrOct),5,8)];
 				}
 				displayStr[j]='\0';
-				*str_len+= sprintf(&str[*str_len], "%s(l:%d)\n",
-														displayStr, len);
+				if (displayNtEnabled) {
+					*str_len+= sprintf(&str[*str_len], "%s(l:%d) type:%s(%d) info:%s(%d)\n",
+												displayStr, len,
+												get_code_2_str(displayType, dcodQ931DisplayTypeTable), displayType,
+												get_code_2_str(assocInfo, dcodQ931AssocInfoTable), assocInfo);
+				} else {
+					*str_len+= sprintf(&str[*str_len], "%s(l:%d)\n",
+															displayStr, len);
+				}
 			}
 			break;
 		case PROT_Q931_IE_RESTART_IND:
@@ -714,8 +737,16 @@ uint32_t sngisdn_decode_ie(char *str, uint32_t *str_len, uint8_t current_codeset
 														calling_subaddr_string, (j-1), get_code_2_str(type, dcodQ931TypeOfSubaddressTable), type);
 			}
 			break;
-		case PROT_Q931_IE_REDIRECTION_NUMBER:
 		case PROT_Q931_IE_NOTIFICATION_IND:
+			{
+				uint8_t desc;
+
+				desc = get_bits(OCTET(3),1,7);
+				*str_len += sprintf(&str[*str_len], "%s (%d)\n",
+														get_code_2_str(desc, dcodQ931NotificationIndTable), desc);
+			}
+			break;
+		case PROT_Q931_IE_REDIRECTION_NUMBER:		
 		case PROT_Q931_IE_DATE_TIME:
 		case PROT_Q931_IE_INFORMATION_REQUEST:
 		case PROT_Q931_IE_SIGNAL:
@@ -752,7 +783,7 @@ void print_hex_dump(char* str, uint32_t *str_len, uint8_t* data, uint32_t index_
 {
 	uint32_t k;
 	*str_len += sprintf(&str[*str_len], "  [ ");
-	for(k=index_start; k <= index_end; k++) {
+	for(k=index_start; k < index_end; k++) {
 		if (k && !(k%32)) {
 			*str_len += sprintf(&str[*str_len], "\n    ");
 		}
@@ -833,9 +864,10 @@ static ftdm_status_t sngisdn_get_frame_info(uint8_t *data, uint32_t data_len, ft
 			//ftdm_log(FTDM_LOG_DEBUG, "Decoded IE:%s\n", get_code_2_str(ie_id, dcodQ931IEIDTable));
 		}
 		if (!bchan_no) {
+			uint32_t tmp_len = 0;
 			char tmp[1000];
-			print_hex_dump(tmp, 0, data, 0, data_len);			
-			ftdm_log(FTDM_LOG_WARNING, "Failed to determine b-channel on SETUP message\n%s\n", tmp);
+			print_hex_dump(tmp, &tmp_len, data, 0, data_len);			
+			ftdm_log(FTDM_LOG_DEBUG, "Failed to determine b-channel on SETUP message\n%s\n", tmp);
 		}
 	}
 
@@ -911,7 +943,7 @@ static ftdm_status_t sngisdn_map_call(sngisdn_span_data_t *signal_data, sngisdn_
 		case PROT_Q931_MSGTYPE_USER_INFO:
 		case PROT_Q931_MSGTYPE_DISCONNECT:
 		case PROT_Q931_MSGTYPE_RELEASE:
-		case PROT_Q931_MSGTYPE_RELEASE_ACK:
+		case PROT_Q931_MSGTYPE_RESTART_ACK:
 		case PROT_Q931_MSGTYPE_RELEASE_COMPLETE:
 		case PROT_Q931_MSGTYPE_FACILITY:
 		case PROT_Q931_MSGTYPE_NOTIFY:

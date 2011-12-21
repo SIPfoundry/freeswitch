@@ -1,3 +1,11 @@
+remove SWITCH_RTP_FLAG_AUTO_CNG - works incorrectly.
+moves the switch_rtp_request_port() call from the contructor to FSH323Connection::CreateRealTimeLogicalChannel() - fix 
+    rtp port leak. tnx to Peter Olsson.
+fix log printing
+fix small interoperability issues if remote endpoint send progress twice
+make sure dtmfinband gets initialized
+make gk-identifier and gk-interface settings optional (documentation sayed that about gk-identifier already)
+fix race condition on destroying signaling thread in h323 library
 Adds an extra switch_rtp_destroy or switch_rtp_release_port when a session ends 
     - to make sure the port is returned to FS. thx to Peter Olsson.
 fix issues with Progress message type if pre_answer enabled

@@ -9,8 +9,11 @@
 package org.freeswitch.swig;
 
 class freeswitchJNI {
+  public final static native void setGlobalVariable(String jarg1, String jarg2);
+  public final static native String getGlobalVariable(String jarg1);
   public final static native void consoleLog(String jarg1, String jarg2);
   public final static native void consoleCleanLog(String jarg1);
+  public final static native boolean email(String jarg1, String jarg2, String jarg3, String jarg4, String jarg5, String jarg6, String jarg7);
   public final static native long new_IVRMenu(long jarg1, IVRMenu jarg1_, String jarg2, String jarg3, String jarg4, String jarg5, String jarg6, String jarg7, String jarg8, String jarg9, String jarg10, int jarg11, int jarg12, int jarg13, int jarg14, int jarg15, int jarg16);
   public final static native void delete_IVRMenu(long jarg1);
   public final static native void IVRMenu_bindAction(long jarg1, IVRMenu jarg1_, String jarg2, String jarg3, String jarg4);
@@ -53,6 +56,8 @@ class freeswitchJNI {
   public final static native long new_Event__SWIG_0(String jarg1, String jarg2);
   public final static native long new_Event__SWIG_1(long jarg1, int jarg2);
   public final static native void delete_Event(long jarg1);
+  public final static native int Event_chat_execute(long jarg1, Event jarg1_, String jarg2, String jarg3);
+  public final static native int Event_chat_send(long jarg1, Event jarg1_, String jarg2);
   public final static native String Event_serialize(long jarg1, Event jarg1_, String jarg2);
   public final static native boolean Event_setPriority(long jarg1, Event jarg1_, long jarg2);
   public final static native String Event_getHeader(long jarg1, Event jarg1_, String jarg2);
@@ -127,7 +132,7 @@ class freeswitchJNI {
   public final static native String CoreSession_getDigits__SWIG_1(long jarg1, CoreSession jarg1_, int jarg2, String jarg3, int jarg4, int jarg5);
   public final static native int CoreSession_transfer(long jarg1, CoreSession jarg1_, String jarg2, String jarg3, String jarg4);
   public final static native String CoreSession_read(long jarg1, CoreSession jarg1_, int jarg2, int jarg3, String jarg4, int jarg5, String jarg6, int jarg7);
-  public final static native String CoreSession_playAndGetDigits(long jarg1, CoreSession jarg1_, int jarg2, int jarg3, int jarg4, int jarg5, String jarg6, String jarg7, String jarg8, String jarg9, String jarg10, int jarg11);
+  public final static native String CoreSession_playAndGetDigits(long jarg1, CoreSession jarg1_, int jarg2, int jarg3, int jarg4, int jarg5, String jarg6, String jarg7, String jarg8, String jarg9, String jarg10, int jarg11, String jarg12);
   public final static native int CoreSession_streamFile(long jarg1, CoreSession jarg1_, String jarg2, int jarg3);
   public final static native int CoreSession_sleep(long jarg1, CoreSession jarg1_, int jarg2, int jarg3);
   public final static native int CoreSession_flushEvents(long jarg1, CoreSession jarg1_);

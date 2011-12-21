@@ -3,11 +3,11 @@ INCS=-I$(PWD)/src/include
 LIBEDIT_DIR=../../libs/libedit
 DEBUG=-g -ggdb
 BASE_FLAGS=$(INCS) -DHAVE_EDITLINE $(DEBUG) -I$(LIBEDIT_DIR)/src/ -fPIC
-PICKY=-O2 -ffast-math -Wall -Werror -Wunused-variable -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes
+PICKY=-O2
 CFLAGS=$(BASE_FLAGS) $(PICKY)
-CXXFLAGS=$(BASE_FLAGS) -Wall -Werror -Wno-unused-variable
+CXXFLAGS=$(BASE_FLAGS)
 MYLIB=libesl.a
-LIBS=-lncurses -lpthread -lesl -lm
+LIBS=-lncurses -lesl -lpthread -lm
 LDFLAGS=-L.
 OBJS=src/esl.o src/esl_event.o src/esl_threadmutex.o src/esl_config.o src/esl_json.o src/esl_buffer.o
 SRC=src/esl.c src/esl_json.c src/esl_event.c src/esl_threadmutex.c src/esl_config.c src/esl_oop.cpp src/esl_json.c src/esl_buffer.c
@@ -32,12 +32,12 @@ testclient: $(MYLIB) testclient.c
 	$(CC) $(CC_CFLAGS) $(CFLAGS) testclient.c -o testclient $(LDFLAGS) $(LIBS)
 
 fs_cli: $(MYLIB) fs_cli.c
-	$(CC) $(CC_CFLAGS) $(CFLAGS) fs_cli.c -o fs_cli $(LDFLAGS) -L$(LIBEDIT_DIR)/src/.libs $(LIBS) -ledit
+	$(CC) $(CC_CFLAGS) $(CFLAGS) fs_cli.c -o fs_cli $(LDFLAGS) -L$(LIBEDIT_DIR)/src/.libs -ledit $(LIBS)
 
-%.o: %.c
+%.o: %.c $(HEADERS)
 	$(CC) $(CC_CFLAGS) $(CFLAGS) -c $< -o $@
 
-%.o: %.cpp
+%.o: %.cpp $(HEADERS)
 	$(CXX) $(CXX_CFLAGS) $(CXXFLAGS) -c $< -o $@
 
 clean:
@@ -91,6 +91,9 @@ javamod: $(MYLIB)
 
 managedmod: $(MYLIB)
 	$(MAKE) MYLIB="../$(MYLIB)" SOLINK="$(SOLINK)" CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" CXX_CFLAGS="$(CXX_CFLAGS)" -C managed
+
+perlmod-install: perlmod
+	$(MAKE) -C perl install
 
 phpmod-install: phpmod
 	$(MAKE) -C php install

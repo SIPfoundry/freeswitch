@@ -105,7 +105,7 @@ ESLevent *ESLconnection::api(const char *cmd, const char *arg)
 	return event;
 }
 
-ESLevent *ESLconnection::bgapi(const char *cmd, const char *arg)
+ESLevent *ESLconnection::bgapi(const char *cmd, const char *arg, const char *job_uuid)
 {
 	size_t len;
 	char *cmd_buf;
@@ -115,12 +115,17 @@ ESLevent *ESLconnection::bgapi(const char *cmd, const char *arg)
 		return NULL;
 	}
 
-	len = strlen(cmd) + (arg ? strlen(arg) : 0) + 10;
+	len = strlen(cmd) + (arg ? strlen(arg) : 0) + (job_uuid ? strlen(job_uuid) + 12 : 0) + 10;
 
 	cmd_buf = (char *) malloc(len + 1);
 	assert(cmd_buf);
+	
+	if (job_uuid) {
+		snprintf(cmd_buf, len, "bgapi %s%s%s\nJob-UUID: %s", cmd, arg ? " " : "", arg ? arg : "", job_uuid);
+	} else {
+		snprintf(cmd_buf, len, "bgapi %s%s%s", cmd, arg ? " " : "", arg ? arg : "");
+	}
 
-	snprintf(cmd_buf, len, "bgapi %s %s", cmd, arg ? arg : "");
 	*(cmd_buf + (len)) = '\0';
 
 	event = sendRecv(cmd_buf);
@@ -198,6 +203,15 @@ ESLevent *ESLconnection::sendEvent(ESLevent *send_me)
 	}
 
 	return new ESLevent("server_disconnected");
+}
+
+int ESLconnection::sendMSG(ESLevent *send_me, const char *uuid)
+{
+	if (esl_sendmsg(&handle, send_me->event, uuid) == ESL_SUCCESS) {
+		return 0;
+	}
+
+	return 1;
 }
 
 ESLevent *ESLconnection::recvEvent()
@@ -385,12 +399,12 @@ bool ESLevent::setPriority(esl_priority_t priority)
 	return false;
 }
 
-const char *ESLevent::getHeader(const char *header_name)
+const char *ESLevent::getHeader(const char *header_name, int idx)
 {
 	this_check("");
 
 	if (event) {
-		return esl_event_get_header(event, header_name);
+		return esl_event_get_header_idx(event, header_name, idx);
 	} else {
 		esl_log(ESL_LOG_ERROR, "Trying to getHeader an event that does not exist!\n");
 	}
@@ -403,6 +417,32 @@ bool ESLevent::addHeader(const char *header_name, const char *value)
 
 	if (event) {
 		return esl_event_add_header_string(event, ESL_STACK_BOTTOM, header_name, value) == ESL_SUCCESS ? true : false;
+	} else {
+		esl_log(ESL_LOG_ERROR, "Trying to addHeader an event that does not exist!\n");
+	}
+
+	return false;
+}
+
+bool ESLevent::pushHeader(const char *header_name, const char *value)
+{
+	this_check(false);
+
+	if (event) {
+		return esl_event_add_header_string(event, ESL_STACK_PUSH, header_name, value) == ESL_SUCCESS ? true : false;
+	} else {
+		esl_log(ESL_LOG_ERROR, "Trying to addHeader an event that does not exist!\n");
+	}
+
+	return false;
+}
+
+bool ESLevent::unshiftHeader(const char *header_name, const char *value)
+{
+	this_check(false);
+
+	if (event) {
+		return esl_event_add_header_string(event, ESL_STACK_UNSHIFT, header_name, value) == ESL_SUCCESS ? true : false;
 	} else {
 		esl_log(ESL_LOG_ERROR, "Trying to addHeader an event that does not exist!\n");
 	}

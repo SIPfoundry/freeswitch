@@ -18,6 +18,11 @@ with the signaling protocols that you can run on top of your I/O interfaces.
 		-->
 		<!--<param name="enable-analog-option" value="call-swap"/>-->
 		<!--<param name="enable-analog-option" value="3-way"/>-->
+		<!--
+		Refuse to load the module if there is configuration errors
+		Defaults to 'no'
+		-->
+		<!--<param name="fail-on-error" value="no"/>-->
 	</settings>
 
 	<!-- Sample analog configuration (The analog_spans tag is for ftmod_analog) -->
@@ -54,6 +59,9 @@ with the signaling protocols that you can run on top of your I/O interfaces.
 			<!-- whether you want to wait for caller id -->
 			<param name="enable-callerid" value="true"/>
 
+			<!-- How much to wait for dial tone (0 if you just want to dial out immediately without waiting for dial tone) -->
+			<!--<param name="wait-dialtone-timeout" value="5000"/>-->
+
 			<!-- whether you want to enable callwaiting feature -->
 			<!--<param name="callwaiting" value="true"/>-->
 
@@ -65,6 +73,11 @@ with the signaling protocols that you can run on top of your I/O interfaces.
 			Minimum delay (in milliseconds) required between an answer polarity reverse
 			and hangup polarity reverse in order to assume the second polarity reverse is a real hangup
 			<param name="polarity-delay" value="600"/>
+			-->
+
+			<!-- Retrieve caller id on polarity reverse -->
+			<!-- 
+			<param name="polarity-callerid" value="true"/>
 			-->
 
 			<!-- regex to stop dialing when it matches -->
@@ -267,5 +280,37 @@ with the signaling protocols that you can run on top of your I/O interfaces.
 			-->
 		</span>
 	</r2_spans>
+
+	<!-- 
+		PRI passive tapping spans. Requires patched version from libpri at http://svn.digium.com/svn/libpri/team/moy/tap-1.4
+		You must also configure FreeTDM with "-with-pritap" (see ./configure help for details)
+	-->
+	<pritap_spans>
+		<span name="tapped1">
+			<!-- The peer span name used to tap the link -->
+			<param name="peerspan" value="tapped2"/>
+
+			<!-- 
+				Whether to mix the audio from the peerspan with the audio from this span 
+				This is most likely what you want (and therefore the default) so you can hear
+				the full conversation being tapped instead of just one side
+			-->
+			<!-- <param name="mixaudio" value="yes"/> -->
+			
+			<!-- switch parameters (required), where to send calls to -->
+			<param name="dialplan" value="XML"/>
+			<param name="context" value="default"/>
+		</span>
+
+		<span name="tapped2">
+			<!-- This span is linked to "tapped1" through its peerspan parameter -->
+			<param name="peerspan" value="tapped1"/>
+			<!-- <param name="mixaudio" value="yes"/> -->
+
+			<!-- switch parameters (required), where to send calls to -->
+			<param name="dialplan" value="XML"/>
+			<param name="context" value="default"/>
+		</span>
+	</pritap_spans>
 </configuration>
 

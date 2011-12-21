@@ -29,6 +29,13 @@
   <profiles>
     <!--If no profile is specified it will default to "default"-->
     <profile name="default">
+      <!-- Directory to drop CDR's 
+	   'auto' means $PREFIX/logs/conference_cdr/<confernece_uuid>.cdr.xml
+	   a non-absolute path means $PREFIX/logs/<value>/<confernece_uuid>.cdr.xml
+	   absolute path means <value>/<confernece_uuid>.cdr.xml
+      -->
+      <!-- <param name="cdr-log-dir" value="auto"/> -->
+      
       <!-- Domain (for presence) -->
       <param name="domain" value="$${domain}"/>
       <!-- Sample Rate-->
@@ -45,6 +52,8 @@
 
       <!-- Name of the caller control group to use for this profile -->
       <!-- <param name="caller-controls" value="some name"/> -->
+      <!-- Name of the caller control group to use for the moderator in this profile -->
+      <!-- <param name="moderator-controls" value="some name"/> -->
       <!-- TTS Engine to use -->
       <!--<param name="tts-engine" value="cepstral"/>-->
       <!-- TTS Voice to use -->
@@ -52,8 +61,9 @@
 
       <!-- If TTS is enabled all audio-file params beginning with -->
       <!-- 'say:' will be considered text to say with TTS -->
-      <!-- Set a default path here so you can use relative paths in the other sound params-->
-      <param name="sound-prefix" value="$${sounds_dir}/en/us/callie"/>
+      <!-- Override the default path here, after which you use relative paths in the other sound params -->
+      <!-- Note: The default path is the conference's first caller's sound_prefix -->
+      <!--<param name="sound-prefix" value="$${sounds_dir}/en/us/callie"/>-->
       <!-- File to play to acknowledge succees -->
       <!--<param name="ack-sound" value="beep.wav"/>-->
       <!-- File to play to acknowledge failure -->
@@ -86,6 +96,9 @@
       <param name="bad-pin-sound" value="conference/conf-bad-pin.wav"/>
       <!-- Conference pin -->
       <!--<param name="pin" value="12345"/>-->
+      <!--<param name="moderator-pin" value="54321"/>-->
+      <!-- Max number of times the user can be prompted for PIN -->
+      <!--<param name="pin-retries" value="3"/>-->
       <!-- Default Caller ID Name for outbound calls -->
       <param name="caller-id-name" value="$${outbound_caller_name}"/>
       <!-- Default Caller ID Number for outbound calls -->
@@ -99,6 +112,12 @@
       <!--
       <param name="auto-record" value="$${recordings_dir}/${conference_name}_${strftime(%Y-%m-%d-%H-%M-%S)}.wav"/>
       -->
+
+      <!-- IVR digit machine timeouts -->
+      <!-- How much to wait between DTMF digits to match caller-controls -->
+      <!-- <param name="ivr-dtmf-timeout" value="500"/> -->
+      <!-- How much to wait for the first DTMF, 0 forever -->
+      <!-- <param name="ivr-input-timeout" value="0" /> -->
     </profile>
 
     <profile name="wideband">
@@ -106,7 +125,7 @@
       <param name="rate" value="16000"/>
       <param name="interval" value="20"/>
       <param name="energy-level" value="300"/>
-      <param name="sound-prefix" value="$${sounds_dir}/en/us/callie"/>
+      <!--<param name="sound-prefix" value="$${sounds_dir}/en/us/callie"/>-->
       <param name="muted-sound" value="conference/conf-muted.wav"/>
       <param name="unmuted-sound" value="conference/conf-unmuted.wav"/>
       <param name="alone-sound" value="conference/conf-alone.wav"/>
@@ -131,7 +150,7 @@
       <param name="rate" value="32000"/>
       <param name="interval" value="20"/>
       <param name="energy-level" value="300"/>
-      <param name="sound-prefix" value="$${sounds_dir}/en/us/callie"/>
+      <!--<param name="sound-prefix" value="$${sounds_dir}/en/us/callie"/>-->
       <param name="muted-sound" value="conference/conf-muted.wav"/>
       <param name="unmuted-sound" value="conference/conf-unmuted.wav"/>
       <param name="alone-sound" value="conference/conf-alone.wav"/>
@@ -156,7 +175,7 @@
       <param name="rate" value="48000"/>
       <param name="interval" value="10"/>
       <param name="energy-level" value="300"/>
-      <param name="sound-prefix" value="$${sounds_dir}/en/us/callie"/>
+      <!--<param name="sound-prefix" value="$${sounds_dir}/en/us/callie"/>-->
       <param name="muted-sound" value="conference/conf-muted.wav"/>
       <param name="unmuted-sound" value="conference/conf-unmuted.wav"/>
       <param name="alone-sound" value="conference/conf-alone.wav"/>

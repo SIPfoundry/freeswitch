@@ -15,7 +15,7 @@
 . /etc/init.d/functions
 
 PROG_NAME=freeswitch
-PID_FILE=${PID_FILE-/opt/freeswitch/run/freeswitch.pid}
+PID_FILE=${PID_FILE-/var/run/freeswitch/freeswitch.pid}
 FS_USER=${FS_USER-freeswitch}
 FS_FILE=${FS_FILE-/opt/freeswitch/bin/freeswitch} 
 FS_HOME=${FS_HOME-/opt/freeswitch}
@@ -43,8 +43,8 @@ start() {
         fi
 	cd $FS_HOME
         daemon --user $FS_USER --pidfile $PID_FILE "$FS_FILE $FREESWITCH_ARGS $FREESWITCH_PARAMS >/dev/null 2>&1"
-		echo
 		RETVAL=$?
+		echo
         [ $RETVAL -eq 0 ] && touch $LOCK_FILE;
 	echo
         return $RETVAL

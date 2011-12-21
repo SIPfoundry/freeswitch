@@ -135,10 +135,14 @@ SWITCH_DECLARE(switch_status_t) switch_core_perform_file_open(const char *file, 
 		switch_uuid_format(uuid_str, &uuid);
 
 		fh->spool_path = switch_core_sprintf(fh->memory_pool, "%s%s%s.%s", spool_path, SWITCH_PATH_SEPARATOR, uuid_str, ext);
+	} else {
+		fh->spool_path = NULL;
 	}
 
 	if (rhs) {
 		fh->handler = switch_core_strdup(fh->memory_pool, rhs);
+	} else {
+		fh->handler = NULL;
 	}
 
 	if (channels) {
@@ -204,7 +208,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_perform_file_open(const char *file, 
 SWITCH_DECLARE(switch_status_t) switch_core_file_read(switch_file_handle_t *fh, void *data, switch_size_t *len)
 {
 	switch_status_t status = SWITCH_STATUS_FALSE;
-	switch_size_t want, got, orig_len = *len;
+	switch_size_t want, orig_len = *len;
 
 	switch_assert(fh != NULL);
 	switch_assert(fh->file_interface != NULL);
@@ -275,8 +279,6 @@ SWITCH_DECLARE(switch_status_t) switch_core_file_read(switch_file_handle_t *fh, 
 
 	}
 
-
-	got = *len;
 
 	if (!switch_test_flag(fh, SWITCH_FILE_NATIVE) && fh->native_rate != fh->samplerate) {
 		if (!fh->resampler) {
@@ -393,7 +395,6 @@ SWITCH_DECLARE(switch_status_t) switch_core_file_write(switch_file_handle_t *fh,
 				}
 			}
 		}
-
 		fh->samples_out += orig_len;
 		return status;
 	} else {
@@ -447,14 +448,11 @@ SWITCH_DECLARE(switch_status_t) switch_core_file_seek(switch_file_handle_t *fh, 
 	switch_set_flag(fh, SWITCH_FILE_SEEK);
 	status = fh->file_interface->file_seek(fh, cur_pos, samples, whence);
 
-	if (samples) {
-		fh->offset_pos = *cur_pos;
+	fh->offset_pos = *cur_pos;
 
-		if (switch_test_flag(fh, SWITCH_FILE_FLAG_WRITE)) {
-			fh->samples_out = *cur_pos;
-		}
+	if (switch_test_flag(fh, SWITCH_FILE_FLAG_WRITE)) {
+		fh->samples_out = *cur_pos;
 	}
-
 
 	return status;
 }
@@ -551,7 +549,6 @@ SWITCH_DECLARE(switch_status_t) switch_core_file_close(switch_file_handle_t *fh)
 					if (fh->file_interface->file_write(fh, fh->pre_buffer_data, &blen) != SWITCH_STATUS_SUCCESS) {
 						break;
 					}
-					fh->samples_out += blen;
 				}
 			}
 		}
@@ -567,15 +564,17 @@ SWITCH_DECLARE(switch_status_t) switch_core_file_close(switch_file_handle_t *fh)
 
 	if (fh->spool_path) {
 		char *command;
-		int result;
 
 #ifdef _MSC_VER
 		command = switch_mprintf("move %s %s", fh->spool_path, fh->file_path);
 #else
 		command = switch_mprintf("/bin/mv %s %s", fh->spool_path, fh->file_path);
 #endif
-		result = system(command);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Copy spooled file [%s] to [%s]\n", fh->spool_path, fh->file_path);
+		if (system(command) == -1) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to copy spooled file [%s] to [%s] because of a command error : %s\n", fh->spool_path, fh->file_path, command);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Copy spooled file [%s] to [%s]\n", fh->spool_path, fh->file_path);
+		}
 		free(command);
 	}
 

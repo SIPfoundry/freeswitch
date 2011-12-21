@@ -531,16 +531,33 @@ SWITCH_STANDARD_API(hash_api_function)
 	return SWITCH_STATUS_SUCCESS;
 }
 
-#define HASH_DUMP_SYNTAX "all|limit|db"
+#define HASH_DUMP_SYNTAX "all|limit|db [<realm>]"
 SWITCH_STANDARD_API(hash_dump_function) 
 {
 	int mode;
 	switch_hash_index_t *hi;
+	int argc = 0;
+	char *argv[4] = { 0 };
+	char *mydata = NULL;
+	int realm = 0;
+	char *realmvalue = NULL;
 	
-	if (zstr(cmd)) {
+	if (!zstr(cmd)) {
+		mydata = strdup(cmd);
+		switch_assert(mydata);
+		argc = switch_separate_string(mydata, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
+	} else {
+		realmvalue = "test";
+		realm = 0;
 		stream->write_function(stream, "Usage: "HASH_DUMP_SYNTAX"\n");
 		return SWITCH_STATUS_SUCCESS;
-	}
+	}	
+
+	cmd = strdup(argv[0]);
+	if (argc == 2) {
+		realm = 1;
+		realmvalue = switch_mprintf("%s_", argv[1]);
+	} 
 	
 	if (!strcmp(cmd, "all")) {
 		mode = 3;
@@ -552,7 +569,6 @@ SWITCH_STANDARD_API(hash_dump_function)
 		stream->write_function(stream, "Usage: "HASH_DUMP_SYNTAX"\n");
 		return SWITCH_STATUS_SUCCESS;
 	}
-	
 	
 	if (mode & 1) {
 		switch_thread_rwlock_rdlock(globals.limit_hash_rwlock);
@@ -577,8 +593,13 @@ SWITCH_STANDARD_API(hash_dump_function)
 			const void *key;
 			switch_ssize_t keylen;
 			switch_hash_this(hi, &key, &keylen, &val);
-
-			stream->write_function(stream, "D/%s/%s\n", key, (char*)val);
+			if (realm) {
+				if (strstr(key, realmvalue)) {
+					stream->write_function(stream, "D/%s/%s\n", key, (char*)val);
+				}
+			} else {
+				stream->write_function(stream, "D/%s/%s\n", key, (char*)val);
+			}
 		}
 		switch_thread_rwlock_unlock(globals.db_hash_rwlock);
 	}
@@ -590,7 +611,7 @@ SWITCH_STANDARD_API(hash_dump_function)
 #define HASH_REMOTE_SYNTAX "list|kill [name]|rescan"
 SWITCH_STANDARD_API(hash_remote_function) 
 {
-	int argc;
+	//int argc;
 	char *argv[10];
 	char *dup = NULL;
 	
@@ -601,7 +622,7 @@ SWITCH_STANDARD_API(hash_remote_function)
 	
 	dup = strdup(cmd);
 	
-	argc = switch_split(dup, ' ', argv);
+	switch_split(dup, ' ', argv);
 	if (argv[0] && !strcmp(argv[0], "list")) {
 		switch_hash_index_t *hi;
 		stream->write_function(stream, "Remote connections:\nName\t\t\tState\n");
@@ -924,7 +945,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_hash_load)
 	switch_scheduler_add_task(switch_epoch_time_now(NULL) + LIMIT_HASH_CLEANUP_INTERVAL, limit_hash_cleanup_callback, "limit_hash_cleanup", "mod_hash", 0, NULL,
 						  SSHF_NONE);
 	
-	SWITCH_ADD_APP(app_interface, "hash", "Insert into the hashtable", HASH_DESC, hash_function, HASH_USAGE, SAF_SUPPORT_NOMEDIA)
+	SWITCH_ADD_APP(app_interface, "hash", "Insert into the hashtable", HASH_DESC, hash_function, HASH_USAGE, SAF_SUPPORT_NOMEDIA | SAF_ZOMBIE_EXEC)
 	SWITCH_ADD_API(commands_api_interface, "hash", "hash get/set", hash_api_function, "[insert|delete|select]/<realm>/<key>/<value>");
 	SWITCH_ADD_API(commands_api_interface, "hash_dump", "dump hash/limit_hash data (used for synchronization)", hash_dump_function, HASH_DUMP_SYNTAX);
 	SWITCH_ADD_API(commands_api_interface, "hash_remote", "hash remote", hash_remote_function, HASH_REMOTE_SYNTAX);

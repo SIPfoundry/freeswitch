@@ -29,6 +29,12 @@
  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Contributors: 
+ *
+ * Moises Silva <moy@sangoma.com>
+ * W McRoberts <fs@whmcr.com>
+ *
  */
 
 #include "private/ftdm_core.h"
@@ -94,6 +100,7 @@ struct ioctl_codes {
     ioctlcmd ECHOTRAIN;
     ioctlcmd SETTXBITS;
     ioctlcmd GETRXBITS;
+    ioctlcmd SETPOLARITY;
 };
 
 /**
@@ -169,7 +176,8 @@ static struct ioctl_codes dahdi_ioctl_codes = {
     .GETCONFMUTE = DAHDI_GETCONFMUTE,
     .ECHOTRAIN = DAHDI_ECHOTRAIN,
     .SETTXBITS = DAHDI_SETTXBITS,
-    .GETRXBITS = DAHDI_GETRXBITS
+    .GETRXBITS = DAHDI_GETRXBITS,
+    .SETPOLARITY = DAHDI_SETPOLARITY
 };
 
 #define ZT_INVALID_SOCKET -1
@@ -725,7 +733,7 @@ static FIO_COMMAND_FUNCTION(zt_command)
 		{
 			int command = ZT_OFFHOOK;
 			if (ioctl(ftdmchan->sockfd, codes.HOOK, &command)) {
-				snprintf(ftdmchan->last_error, sizeof(ftdmchan->last_error), "OFFHOOK Failed");
+				ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "OFFHOOK Failed");
 				return FTDM_FAIL;
 			}
 			ftdm_set_flag_locked(ftdmchan, FTDM_CHANNEL_OFFHOOK);
@@ -735,7 +743,7 @@ static FIO_COMMAND_FUNCTION(zt_command)
 		{
 			int command = ZT_ONHOOK;
 			if (ioctl(ftdmchan->sockfd, codes.HOOK, &command)) {
-				snprintf(ftdmchan->last_error, sizeof(ftdmchan->last_error), "ONHOOK Failed");
+				ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "ONHOOK Failed");
 				return FTDM_FAIL;
 			}
 			ftdm_clear_flag_locked(ftdmchan, FTDM_CHANNEL_OFFHOOK);
@@ -745,7 +753,7 @@ static FIO_COMMAND_FUNCTION(zt_command)
 		{
 			int command = ZT_FLASH;
 			if (ioctl(ftdmchan->sockfd, codes.HOOK, &command)) {
-				snprintf(ftdmchan->last_error, sizeof(ftdmchan->last_error), "FLASH Failed");
+				ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "FLASH Failed");
 				return FTDM_FAIL;
 			}
 		}
@@ -754,7 +762,7 @@ static FIO_COMMAND_FUNCTION(zt_command)
 		{
 			int command = ZT_WINK;
 			if (ioctl(ftdmchan->sockfd, codes.HOOK, &command)) {
-				snprintf(ftdmchan->last_error, sizeof(ftdmchan->last_error), "WINK Failed");
+				ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "WINK Failed");
 				return FTDM_FAIL;
 			}
 		}
@@ -763,7 +771,7 @@ static FIO_COMMAND_FUNCTION(zt_command)
 		{
 			int command = ZT_RING;
 			if (ioctl(ftdmchan->sockfd, codes.HOOK, &command)) {
-				snprintf(ftdmchan->last_error, sizeof(ftdmchan->last_error), "Ring Failed");
+				ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "RING Failed");
 				return FTDM_FAIL;
 			}
 			ftdm_set_flag_locked(ftdmchan, FTDM_CHANNEL_RINGING);
@@ -773,7 +781,7 @@ static FIO_COMMAND_FUNCTION(zt_command)
 		{
 			int command = ZT_RINGOFF;
 			if (ioctl(ftdmchan->sockfd, codes.HOOK, &command)) {
-				snprintf(ftdmchan->last_error, sizeof(ftdmchan->last_error), "Ring-off failed");
+				ftdm_log_chan_msg(ftdmchan, FTDM_LOG_ERROR, "Ring-off Failed");
 				return FTDM_FAIL;
 			}
 			ftdm_clear_flag_locked(ftdmchan, FTDM_CHANNEL_RINGING);
@@ -824,6 +832,15 @@ static FIO_COMMAND_FUNCTION(zt_command)
 		{
 			int flushmode = ZT_FLUSH_WRITE;
 			err = ioctl(ftdmchan->sockfd, codes.FLUSH, &flushmode);
+		}
+		break;
+	case FTDM_COMMAND_SET_POLARITY:
+		{
+			ftdm_polarity_t polarity = FTDM_COMMAND_OBJ_INT;
+			err = ioctl(ftdmchan->sockfd, codes.SETPOLARITY, polarity);
+			if (!err) {
+				ftdmchan->polarity = polarity;
+			}
 		}
 		break;
 	case FTDM_COMMAND_FLUSH_RX_BUFFERS:
@@ -976,12 +993,18 @@ FIO_SPAN_POLL_EVENT_FUNCTION(zt_poll_event)
 		snprintf(span->last_error, sizeof(span->last_error), "%s", strerror(errno));
 		return FTDM_FAIL;
 	}
-	
+
 	for(i = 1; i <= span->chan_count; i++) {
 		if (pfds[i-1].revents & POLLPRI) {
-			ftdm_set_flag(span->channels[i], FTDM_CHANNEL_EVENT);
+			ftdm_set_io_flag(span->channels[i], FTDM_CHANNEL_IO_EVENT);
 			span->channels[i]->last_event_time = ftdm_current_time_in_ms();
 			k++;
+		}
+		if (pfds[i-1].revents & POLLIN) {
+			ftdm_set_io_flag(span->channels[i], FTDM_CHANNEL_IO_READ);
+		}
+		if (pfds[i-1].revents & POLLOUT) {
+			ftdm_set_io_flag(span->channels[i], FTDM_CHANNEL_IO_WRITE);
 		}
 	}
 
@@ -1064,6 +1087,30 @@ static __inline__ ftdm_status_t zt_channel_process_event(ftdm_channel_t *fchan, 
 			fchan->rx_cas_bits = bits;
 		}
 		break;
+	case ZT_EVENT_BADFCS:
+		{
+			ftdm_log_chan_msg(fchan, FTDM_LOG_ERROR, "Bad frame checksum (ZT_EVENT_BADFCS)\n");
+			*event_id = FTDM_OOB_NOOP;	/* What else could we do? */
+		}
+		break;
+	case ZT_EVENT_OVERRUN:
+		{
+			ftdm_log_chan_msg(fchan, FTDM_LOG_ERROR, "HDLC frame overrun (ZT_EVENT_OVERRUN)\n");
+			*event_id = FTDM_OOB_NOOP;	/* What else could we do? */
+		}
+		break;
+	case ZT_EVENT_ABORT:
+		{
+			ftdm_log_chan_msg(fchan, FTDM_LOG_ERROR, "HDLC abort frame received (ZT_EVENT_ABORT)\n");
+			*event_id = FTDM_OOB_NOOP;	/* What else could we do? */
+		}
+		break;
+	case ZT_EVENT_POLARITY:
+		{
+			ftdm_log_chan_msg(fchan, FTDM_LOG_ERROR, "Got polarity reverse (ZT_EVENT_POLARITY)\n");
+			*event_id = FTDM_OOB_POLARITY_REVERSE;
+		}
+		break;
 	case ZT_EVENT_NONE:
 		{
 			ftdm_log_chan_msg(fchan, FTDM_LOG_DEBUG, "No event\n");
@@ -1092,8 +1139,8 @@ FIO_CHANNEL_NEXT_EVENT_FUNCTION(zt_channel_next_event)
 	zt_event_t zt_event_id = 0;
 	ftdm_span_t *span = ftdmchan->span;
 
-	if (ftdm_test_flag(ftdmchan, FTDM_CHANNEL_EVENT)) {
-		ftdm_clear_flag(ftdmchan, FTDM_CHANNEL_EVENT);
+	if (ftdm_test_io_flag(ftdmchan, FTDM_CHANNEL_IO_EVENT)) {
+		ftdm_clear_io_flag(ftdmchan, FTDM_CHANNEL_IO_EVENT);
 	}
 
 	if (ioctl(ftdmchan->sockfd, codes.GETEVENT, &zt_event_id) == -1) {
@@ -1129,8 +1176,8 @@ FIO_SPAN_NEXT_EVENT_FUNCTION(zt_next_event)
 
 	for(i = 1; i <= span->chan_count; i++) {
 		ftdm_channel_t *fchan = span->channels[i];
-		if (ftdm_test_flag(fchan, FTDM_CHANNEL_EVENT)) {
-			ftdm_clear_flag(fchan, FTDM_CHANNEL_EVENT);
+		if (ftdm_test_io_flag(fchan, FTDM_CHANNEL_IO_EVENT)) {
+			ftdm_clear_io_flag(fchan, FTDM_CHANNEL_IO_EVENT);
 			if (ioctl(fchan->sockfd, codes.GETEVENT, &zt_event_id) == -1) {
 				snprintf(span->last_error, sizeof(span->last_error), "%s", strerror(errno));
 				return FTDM_FAIL;

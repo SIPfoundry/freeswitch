@@ -42,9 +42,35 @@ static void switch_core_standard_on_init(switch_core_session_t *session)
 
 static void switch_core_standard_on_hangup(switch_core_session_t *session)
 {
+	switch_caller_extension_t *extension;
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s Standard HANGUP, cause: %s\n",
 					  switch_channel_get_name(session->channel), switch_channel_cause2str(switch_channel_get_cause(session->channel)));
+	
+	if (!switch_channel_test_flag(session->channel, CF_ZOMBIE_EXEC)) {
+		return;
+	}
+
+	if ((extension = switch_channel_get_caller_extension(session->channel)) == 0) {
+		return;
+	}
+
+	while(extension->current_application) {
+		switch_caller_application_t *current_application = extension->current_application;
+		switch_status_t status;
+
+		extension->current_application = extension->current_application->next;
+
+		status = switch_core_session_execute_application(session,
+														 current_application->application_name, current_application->application_data);
+														 
+		
+		if (status != SWITCH_STATUS_SUCCESS && status != SWITCH_STATUS_IGNORE) {
+			return;
+		}
+	}
+
+
 }
 
 static void switch_core_standard_on_reporting(switch_core_session_t *session)
@@ -62,6 +88,7 @@ static void switch_core_standard_on_destroy(switch_core_session_t *session)
 
 static void switch_core_standard_on_reset(switch_core_session_t *session)
 {
+	switch_channel_set_variable(session->channel, "call_uuid", switch_core_session_get_uuid(session));
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s Standard RESET\n", switch_channel_get_name(session->channel));
 }
@@ -76,6 +103,8 @@ static void switch_core_standard_on_routing(switch_core_session_t *session)
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s Standard ROUTING\n", switch_channel_get_name(session->channel));
 
+	switch_channel_set_variable(session->channel, "call_uuid", switch_core_session_get_uuid(session));
+		
 	if ((switch_channel_test_flag(session->channel, CF_ANSWERED) ||
 		 switch_channel_test_flag(session->channel, CF_EARLY_MEDIA) ||
 		 switch_channel_test_flag(session->channel, CF_SIGNAL_BRIDGE_TTL)) && switch_channel_test_flag(session->channel, CF_PROXY_MODE)) {
@@ -89,6 +118,12 @@ static void switch_core_standard_on_routing(switch_core_session_t *session)
 	} else {
 		char *dp[25];
 		int argc, x, count = 0;
+
+		if ((extension = switch_channel_get_queued_extension(session->channel))) {
+			switch_channel_set_caller_extension(session->channel, extension);
+			switch_channel_set_state(session->channel, CS_EXECUTE);
+			goto end;
+		}
 
 		if (!zstr(caller_profile->dialplan)) {
 			if ((dpstr = switch_core_session_strdup(session, caller_profile->dialplan))) {
@@ -155,6 +190,8 @@ static void switch_core_standard_on_execute(switch_core_session_t *session)
 	switch_caller_extension_t *extension;
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s Standard EXECUTE\n", switch_channel_get_name(session->channel));
+
+	switch_channel_set_variable(session->channel, "call_uuid", switch_core_session_get_uuid(session));
 
 	if (switch_channel_get_variable(session->channel, "recovered") && !switch_channel_test_flag(session->channel, CF_RECOVERED)) {
 		switch_channel_set_flag(session->channel, CF_RECOVERED);
@@ -306,7 +343,12 @@ SWITCH_DECLARE(void) switch_core_session_run(switch_core_session_t *session)
 
 	while ((state = switch_channel_get_state(session->channel)) != CS_DESTROY) {
 
-		switch_channel_wait_for_flag(session->channel, CF_BLOCK_STATE, SWITCH_FALSE, 0, NULL);
+		if (switch_channel_test_flag(session->channel, CF_BLOCK_STATE)) {
+			switch_channel_wait_for_flag(session->channel, CF_BLOCK_STATE, SWITCH_FALSE, 0, NULL);
+			if ((state = switch_channel_get_state(session->channel)) == CS_DESTROY) {
+				break;
+			}
+		}
 
 		midstate = state;
 		if (state != switch_channel_get_running_state(session->channel) || state >= CS_HANGUP) {
@@ -353,7 +395,16 @@ SWITCH_DECLARE(void) switch_core_session_run(switch_core_session_t *session)
 
 				break;
 			case CS_INIT:		/* Basic setup tasks */
-				STATE_MACRO(init, "INIT");
+				{
+					switch_event_t *event;
+
+					STATE_MACRO(init, "INIT");
+					
+					if (switch_event_create(&event, SWITCH_EVENT_CHANNEL_CREATE) == SWITCH_STATUS_SUCCESS) {
+						switch_channel_event_set_data(session->channel, event);
+						switch_event_fire(&event);
+					}
+				}
 				break;
 			case CS_ROUTING:	/* Look for a dialplan and find something to do */
 				STATE_MACRO(routing, "ROUTING");
@@ -396,19 +447,14 @@ SWITCH_DECLARE(void) switch_core_session_run(switch_core_session_t *session)
 		if (endstate == switch_channel_get_running_state(session->channel)) {
 			if (endstate == CS_NEW) {
 				switch_cond_next();
+				switch_ivr_parse_all_events(session);
 				if (!--new_loops) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "%s Timeout waiting for next instruction in CS_NEW!\n",
 									  session->uuid_str);
 					switch_channel_hangup(session->channel, SWITCH_CAUSE_INVALID_CALL_REFERENCE);
 				}
 			} else {
-				switch_core_session_message_t *message;
-
-				while (switch_core_session_dequeue_message(session, &message) == SWITCH_STATUS_SUCCESS) {
-					switch_core_session_receive_message(session, message);
-					message = NULL;
-				}
-
+				switch_ivr_parse_all_events(session);
 				switch_ivr_parse_all_events(session);
 
 				if (switch_channel_get_state(session->channel) == switch_channel_get_running_state(session->channel)) {
@@ -420,11 +466,7 @@ SWITCH_DECLARE(void) switch_core_session_run(switch_core_session_t *session)
 				}
 
 				switch_ivr_parse_all_events(session);
-
-				while (switch_core_session_dequeue_message(session, &message) == SWITCH_STATUS_SUCCESS) {
-					switch_core_session_receive_message(session, message);
-					message = NULL;
-				}
+				switch_ivr_parse_all_events(session);
 			}
 		}
 	}
@@ -468,7 +510,7 @@ static void api_hook(switch_core_session_t *session, const char *hook_var, int u
 {
 	if (!zstr(hook_var)) {
 		switch_stream_handle_t stream = { 0 };
-		char *cmd = switch_core_session_strdup(session, hook_var);
+		char *cmd = strdup(hook_var);
 		char *arg = NULL;
 		char *expanded = NULL;
 
@@ -485,7 +527,7 @@ static void api_hook(switch_core_session_t *session, const char *hook_var, int u
 
 		switch_channel_get_variables(session->channel, &stream.param_event);
 		switch_channel_event_set_data(session->channel, stream.param_event);
-		expanded = switch_channel_expand_variables(session->channel, arg);
+		expanded = switch_event_expand_headers(stream.param_event, arg);
 
 		switch_api_execute(cmd, expanded, use_session ? session : NULL, &stream);
 
@@ -496,6 +538,9 @@ static void api_hook(switch_core_session_t *session, const char *hook_var, int u
 		if (expanded != arg) {
 			switch_safe_free(expanded);
 		}
+
+		switch_safe_free(cmd);
+		
 		switch_safe_free(stream.data);
 	}
 }
@@ -628,6 +673,18 @@ SWITCH_DECLARE(void) switch_core_session_reporting_state(switch_core_session_t *
 	if (switch_event_create(&event, SWITCH_EVENT_CHANNEL_HANGUP_COMPLETE) == SWITCH_STATUS_SUCCESS) {
 		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Hangup-Cause", switch_channel_cause2str(cause));
 		switch_channel_event_set_data(session->channel, event);
+		if (switch_true(switch_channel_get_variable(session->channel, "hangup_complete_with_xml"))) {
+			switch_xml_t cdr = NULL;
+			char *xml_cdr_text;
+			
+			if (switch_ivr_generate_xml_cdr(session, &cdr) == SWITCH_STATUS_SUCCESS) {
+				xml_cdr_text = switch_xml_toxml(cdr, SWITCH_FALSE);
+				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "CDR-Attached", "xml");
+				switch_event_add_body(event, "%s", xml_cdr_text);
+				switch_xml_free(cdr);
+				switch_safe_free(xml_cdr_text);
+			}
+		}
 		switch_event_fire(&event);
 	}
 

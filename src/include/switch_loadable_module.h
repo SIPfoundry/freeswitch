@@ -55,33 +55,35 @@ SWITCH_BEGIN_EXTERN_C
 	struct switch_loadable_module_interface {
 	/*! the name of the module */
 	const char *module_name;
-	/*! the table of endpoints the module has implmented */
+	/*! the table of endpoints the module has implemented */
 	switch_endpoint_interface_t *endpoint_interface;
-	/*! the table of timers the module has implmented */
+	/*! the table of timers the module has implemented */
 	switch_timer_interface_t *timer_interface;
-	/*! the table of dialplans the module has implmented */
+	/*! the table of dialplans the module has implemented */
 	switch_dialplan_interface_t *dialplan_interface;
-	/*! the table of codecs the module has implmented */
+	/*! the table of codecs the module has implemented */
 	switch_codec_interface_t *codec_interface;
-	/*! the table of applications the module has implmented */
+	/*! the table of applications the module has implemented */
 	switch_application_interface_t *application_interface;
-	/*! the table of api functions the module has implmented */
+	/*! the table of chat applications the module has implemented */
+	switch_chat_application_interface_t *chat_application_interface;
+	/*! the table of api functions the module has implemented */
 	switch_api_interface_t *api_interface;
-	/*! the table of file formats the module has implmented */
+	/*! the table of file formats the module has implemented */
 	switch_file_interface_t *file_interface;
-	/*! the table of speech interfaces the module has implmented */
+	/*! the table of speech interfaces the module has implemented */
 	switch_speech_interface_t *speech_interface;
-	/*! the table of directory interfaces the module has implmented */
+	/*! the table of directory interfaces the module has implemented */
 	switch_directory_interface_t *directory_interface;
-	/*! the table of chat interfaces the module has implmented */
+	/*! the table of chat interfaces the module has implemented */
 	switch_chat_interface_t *chat_interface;
-	/*! the table of say interfaces the module has implmented */
+	/*! the table of say interfaces the module has implemented */
 	switch_say_interface_t *say_interface;
-	/*! the table of asr interfaces the module has implmented */
+	/*! the table of asr interfaces the module has implemented */
 	switch_asr_interface_t *asr_interface;
-	/*! the table of management interfaces the module has implmented */
+	/*! the table of management interfaces the module has implemented */
 	switch_management_interface_t *management_interface;
-	/*! the table of limit interfaces the module has implmented */
+	/*! the table of limit interfaces the module has implemented */
 	switch_limit_interface_t *limit_interface;
 	switch_thread_rwlock_t *rwlock;
 	int refs;
@@ -168,6 +170,15 @@ SWITCH_DECLARE(switch_timer_interface_t *) switch_loadable_module_get_timer_inte
   \return the desired application interface
  */
 SWITCH_DECLARE(switch_application_interface_t *) switch_loadable_module_get_application_interface(const char *name);
+
+/*!
+  \brief Retrieve the chat application interface by it's registered name
+  \param name the name of the chat application
+  \return the desired chat application interface
+ */
+SWITCH_DECLARE(switch_chat_application_interface_t *) switch_loadable_module_get_chat_application_interface(const char *name);
+
+SWITCH_DECLARE(switch_status_t) switch_core_execute_chat_app(switch_event_t *message, const char *app, const char *data);
 
 /*!
   \brief Retrieve the API interface by it's registered name
@@ -335,6 +346,18 @@ SWITCH_MOD_DECLARE(switch_status_t) switch_module_shutdown(void);
 	break; \
 	}
 
+#define SWITCH_ADD_CHAT_APP(app_int, int_name, short_descript, long_descript, funcptr, syntax_string, app_flags) \
+	for (;;) { \
+	app_int = (switch_chat_application_interface_t *)switch_loadable_module_create_interface(*module_interface, SWITCH_CHAT_APPLICATION_INTERFACE); \
+	app_int->interface_name = int_name; \
+	app_int->chat_application_function = funcptr; \
+	app_int->short_desc = short_descript; \
+	app_int->long_desc = long_descript; \
+	app_int->syntax = syntax_string; \
+	app_int->flags = app_flags; \
+	break; \
+	}
+
 #define SWITCH_ADD_DIALPLAN(dp_int, int_name, funcptr) \
 	for (;;) { \
 	dp_int = (switch_dialplan_interface_t *)switch_loadable_module_create_interface(*module_interface, SWITCH_DIALPLAN_INTERFACE); \
@@ -438,7 +461,11 @@ static inline void switch_core_codec_add_implementation(switch_memory_pool_t *po
 														/*! deinitalize a codec handle using this implementation */
 														switch_core_codec_destroy_func_t destroy)
 {
-	if (codec_type == SWITCH_CODEC_TYPE_VIDEO || switch_check_interval(actual_samples_per_second, microseconds_per_packet / 1000)) {
+
+	if (decoded_bytes_per_packet > SWITCH_RECOMMENDED_BUFFER_SIZE) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Rejected codec name: %s rate: %u ptime: %u not enough buffer space %d > %d\n",
+						  iananame, actual_samples_per_second, microseconds_per_packet / 1000, decoded_bytes_per_packet, SWITCH_RECOMMENDED_BUFFER_SIZE);
+	} else if (codec_type == SWITCH_CODEC_TYPE_VIDEO || switch_check_interval(actual_samples_per_second, microseconds_per_packet / 1000)) {
 		switch_codec_implementation_t *impl = (switch_codec_implementation_t *) switch_core_alloc(pool, sizeof(*impl));
 		impl->codec_type = codec_type;
 		impl->ianacode = ianacode;

@@ -45,7 +45,7 @@
 
 #include "private/ftdm_core.h"
 
-#include "sng_ss7.h"
+#include "sng_ss7/sng_ss7.h"
 
 /******************************************************************************/
 
@@ -59,6 +59,17 @@
 #define SNGSS7_EVENT_QUEUE_SIZE	100
 
 #define MAX_SIZEOF_SUBADDR_IE	24	/* as per Q931 4.5.9 */
+
+#define SNGSS7_SWITCHTYPE_ANSI(switchtype)	(switchtype == LSI_SW_ANS88) || \
+											(switchtype == LSI_SW_ANS92) || \
+											(switchtype == LSI_SW_ANS95)
+
+typedef struct ftdm2trillium
+{
+	uint8_t ftdm_val;
+	uint8_t trillium_val;
+}ftdm2trillium_t;
+
 
 typedef enum {
 	SNGSS7_CON_IND_EVENT = 0,
@@ -77,9 +88,20 @@ typedef enum {
 } sng_event_type_t;
 
 typedef enum {
-	VOICE = 0,
-	SIG,
-	HOLE
+	SNG_BIT_A	= (1 << 0),
+	SNG_BIT_B	= (1 << 1),
+	SNG_BIT_C	= (1 << 2),
+	SNG_BIT_D	= (1 << 3),
+	SNG_BIT_E	= (1 << 4),
+	SNG_BIT_F	= (1 << 5),
+	SNG_BIT_G	= (1 << 6),
+	SNG_BIT_H	= (1 << 7)
+} sng_bit_enums_t;
+
+typedef enum {
+	SNG_CKT_VOICE = 0,
+	SNG_CKT_SIG,
+	SNG_CKT_HOLE
 } sng_ckt_type_t;
 
 typedef enum {
@@ -294,7 +316,6 @@ typedef struct sng_isup_intf {
 typedef struct sng_isup_ckt {
 	uint32_t		options;
 	uint32_t		flags;
-	uint32_t		ckt_flags;
 	uint32_t		procId;
 	uint32_t		id;
 	uint32_t		ccSpanId;
@@ -306,9 +327,23 @@ typedef struct sng_isup_ckt {
 	uint32_t		typeCntrl;
 	uint32_t		ssf;
 	uint32_t		switchType;
+	
 	uint32_t		clg_nadi;
 	uint32_t		cld_nadi;
+	uint8_t			rdnis_nadi;
+
+	/* Generic Number defaults */
+	uint8_t			gn_nmbqual;			/* Number Qualifier */
+	uint8_t			gn_nadi;			/* Nature of Address indicator */
+	uint8_t 		gn_screen_ind;		/* Screening Indicator */
+	uint8_t			gn_pres_ind;		/* Presentation Indicator */
+	uint8_t			gn_npi;				/* Numbering Plan Indicator */
+	uint8_t			gn_num_inc_ind;		/* Number Incomplete Indicator */
+	/* END - Generic Number defaults */
+			
 	uint32_t		min_digits;
+	uint8_t			itx_auto_reply;
+	uint8_t			transparent_iam;
 	void			*obj;
 	uint16_t		t3;
 	uint16_t		t12;
@@ -376,6 +411,7 @@ typedef struct sng_ss7_cfg {
 	uint32_t			procId;
 	char				license[MAX_PATH];
 	char				signature[MAX_PATH];
+	uint32_t			transparent_iam_max_size;
 	uint32_t			flags;
 	sng_relay_t			relay[MAX_RELAY_CHANNELS+1];
 	sng_mtp1_link_t		mtp1Link[MAX_MTP_LINKS+1];
@@ -387,7 +423,7 @@ typedef struct sng_ss7_cfg {
 	sng_isup_ckt_t		isupCkt[10000]; 	/* KONRAD - only need 2000 ( and 0-1000 aren't used) since other servers are registerd else where */
 	sng_nsap_t			nsap[MAX_NSAPS+1];
 	sng_isap_t			isap[MAX_ISAPS+1];	
-}sng_ss7_cfg_t;
+} sng_ss7_cfg_t;
 
 typedef struct ftdm_sngss7_data {
 	sng_ss7_cfg_t		cfg;
@@ -397,7 +433,7 @@ typedef struct ftdm_sngss7_data {
 	int					message_trace;
 	int					message_trace_level;
 	fio_signal_cb_t		sig_cb;
-}ftdm_sngss7_data_t;
+} ftdm_sngss7_data_t;
 
 typedef struct sngss7_timer_data {
 	ftdm_timer_id_t			hb_timer_id;
@@ -406,13 +442,13 @@ typedef struct sngss7_timer_data {
 	ftdm_sched_callback_t	callback;
 	ftdm_sched_t			*sched;
 	void					*sngss7_info;
-}sngss7_timer_data_t;
+} sngss7_timer_data_t;
 
 typedef struct sngss7_glare_data {
 	uint32_t				spInstId; 
 	uint32_t				circuit; 
 	SiConEvnt				iam;
-}sngss7_glare_data_t;
+} sngss7_glare_data_t;
 
 typedef struct sngss7_group_data {
 	uint32_t				circuit;
@@ -420,7 +456,7 @@ typedef struct sngss7_group_data {
 	uint8_t					status[255];
 	uint8_t					type;
 	uint8_t					cause;
-}sngss7_group_data_t;
+} sngss7_group_data_t;
 
 typedef struct sngss7_chan_data {
 	ftdm_channel_t			*ftdmchan;
@@ -431,22 +467,30 @@ typedef struct sngss7_chan_data {
 	uint32_t				spId;
 	uint8_t					globalFlg;
 	uint32_t				ckt_flags;
+	uint32_t				blk_flags;
+	ftdm_hash_t*			variables;		/* send on next sigevent */
+	ftdm_size_t				raw_data_len;
+	void					*raw_data;		/* send on next sigevent */
 	sngss7_glare_data_t		glare;
 	sngss7_timer_data_t		t35;
-}sngss7_chan_data_t;
-
-typedef struct sngss7_span_data {
-	ftdm_sched_t			*sched;
 	sngss7_group_data_t		rx_grs;
 	sngss7_group_data_t		rx_gra;
 	sngss7_group_data_t		tx_grs;
+	sngss7_group_data_t		ucic;
+} sngss7_chan_data_t;
+
+#define SNGSS7_RX_GRS_PENDING (1 << 0)
+#define SNGSS7_UCIC_PENDING (1 << 1)
+#define SNGSS7_RX_GRA_PENDING (1 << 2)
+typedef struct sngss7_span_data {
+	ftdm_sched_t			*sched;
+	uint32_t                        flags;
 	sngss7_group_data_t		rx_cgb;
 	sngss7_group_data_t		tx_cgb;
 	sngss7_group_data_t		rx_cgu;
 	sngss7_group_data_t		tx_cgu;
-	sngss7_group_data_t		ucic;
 	ftdm_queue_t 			*event_queue;
-}sngss7_span_data_t;
+} sngss7_span_data_t;
 
 typedef struct sngss7_event_data
 {
@@ -489,22 +533,99 @@ typedef enum {
 	FLAG_GLARE				= (1 << 13),
 	FLAG_INFID_RESUME		= (1 << 14),
 	FLAG_INFID_PAUSED		= (1 << 15),
-	FLAG_CKT_UCIC_BLOCK		= (1 << 16),
-	FLAG_CKT_UCIC_UNBLK		= (1 << 17),
-	FLAG_CKT_LC_BLOCK_RX	= (1 << 18),
-	FLAG_CKT_LC_UNBLK_RX	= (1 << 19),
-	FLAG_CKT_MN_BLOCK_RX	= (1 << 20),
-	FLAG_CKT_MN_UNBLK_RX	= (1 << 21),
-	FLAG_CKT_MN_BLOCK_TX	= (1 << 22),
-	FLAG_CKT_MN_UNBLK_TX	= (1 << 23),
-	FLAG_GRP_HW_BLOCK_RX	= (1 << 24),
-	FLAG_GRP_HW_BLOCK_TX	= (1 << 25),
-	FLAG_GRP_MN_BLOCK_RX	= (1 << 26),
-	FLAG_GRP_MN_BLOCK_TX	= (1 << 27),
-	FLAG_GRP_HW_UNBLK_TX	= (1 << 28),
-	FLAG_GRP_MN_UNBLK_TX	= (1 << 29),
-	FLAG_RELAY_DOWN			= (1 << 30)
+	FLAG_SENT_ACM			= (1 << 16),
+	FLAG_RELAY_DOWN			= (1 << 30),
+	FLAG_CKT_RECONFIG		= (1 << 31)
 } sng_ckt_flag_t;
+
+#define CKT_FLAGS_STRING \
+	"RX_RSC", \
+	"TX_RSC", \
+	"TX_RSC_REQ_SENT", \
+	"TX_RSC_RSP_RECIEVED", \
+	"RX_GRS", \
+	"RX_GRS_DONE", \
+	"RX_GRS_CMPLT", \
+	"GRS_BASE", \
+	"TX_GRS", \
+	"TX_GRS_REQ_SENT", \
+	"TX_GRS_RSP_RECIEVED", \
+	"REMOTE_REL", \
+	"LOCAL_REL", \
+	"GLARE", \
+	"INF_RESUME", \
+	"INF_PAUSED", \
+	"TX_ACM_SENT" \
+	"RELAY_DOWN", \
+	"CKT_RECONFIG"
+FTDM_STR2ENUM_P(ftmod_ss7_ckt_state2flag, ftmod_ss7_ckt_flag2str, sng_ckt_flag_t)
+
+/* ckt blocking flags */
+typedef enum {
+	FLAG_CKT_UCIC_BLOCK		= (1 << 0),
+	FLAG_CKT_UCIC_BLOCK_DN	= (1 << 1),
+	FLAG_CKT_UCIC_UNBLK		= (1 << 2),
+	FLAG_CKT_UCIC_UNBLK_DN	= (1 << 3),
+	FLAG_CKT_LC_BLOCK_RX	= (1 << 4),
+	FLAG_CKT_LC_BLOCK_RX_DN	= (1 << 5),
+	FLAG_CKT_LC_UNBLK_RX	= (1 << 6),
+	FLAG_CKT_LC_UNBLK_RX_DN	= (1 << 7),
+	FLAG_CKT_MN_BLOCK_RX	= (1 << 8),
+	FLAG_CKT_MN_BLOCK_RX_DN	= (1 << 9),
+	FLAG_CKT_MN_UNBLK_RX	= (1 << 10),
+	FLAG_CKT_MN_UNBLK_RX_DN	= (1 << 11),
+	FLAG_CKT_MN_BLOCK_TX	= (1 << 12),
+	FLAG_CKT_MN_BLOCK_TX_DN	= (1 << 13),
+	FLAG_CKT_MN_UNBLK_TX	= (1 << 14),
+	FLAG_CKT_MN_UNBLK_TX_DN	= (1 << 15),
+	FLAG_GRP_HW_BLOCK_RX	= (1 << 16),
+	FLAG_GRP_HW_BLOCK_RX_DN	= (1 << 17),
+	FLAG_GRP_HW_BLOCK_TX	= (1 << 18),
+	FLAG_GRP_HW_BLOCK_TX_DN	= (1 << 19),
+	FLAG_GRP_MN_BLOCK_RX	= (1 << 20),
+	FLAG_GRP_MN_BLOCK_RX_DN	= (1 << 21),
+	FLAG_GRP_MN_BLOCK_TX	= (1 << 22),
+	FLAG_GRP_MN_BLOCK_TX_DN	= (1 << 23),
+	FLAG_GRP_HW_UNBLK_TX	= (1 << 24),
+	FLAG_GRP_HW_UNBLK_TX_DN	= (1 << 25),
+	FLAG_GRP_MN_UNBLK_TX	= (1 << 26),
+	FLAG_GRP_MN_UNBLK_TX_DN	= (1 << 27)
+} sng_ckt_block_flag_t;
+
+#define BLK_FLAGS_STRING \
+	"UCIC BLK", \
+	"UCIC BLK DN", \
+	"UCIC UNBLK", \
+	"UCIC UNBLK DN", \
+	"RX LC BLK", \
+	"RX LC BLK DN", \
+	"RX LC UNBLK", \
+	"RX LC UNBLK DN", \
+	"RX CKT BLK", \
+	"RX CKT BLK DN", \
+	"RX CKT UNBLK", \
+	"RX CKT UNBLK DN", \
+	"TX CKT BLK", \
+	"TX CKT BLK DN", \
+	"TX CKT UNBLK", \
+	"TX CKT UNBLK DN", \
+	"RX GRP MN BLK", \
+	"RX GRP MN BLK DN", \
+	"RX GRP MN UNBLK", \
+	"RX GRP MN UNBLK DN", \
+	"TX GRP MN BLK", \
+	"TX GRP MN BLK DN", \
+	"TX GRP MN UNBLK", \
+	"TX GRP MN UNBLK DN", \
+	"RX GRP HW BLK", \
+	"RX GRP HW BLK DN", \
+	"RX GRP HW UNBLK", \
+	"RX GRP HW UNBLK DN", \
+	"TX GRP HW BLK", \
+	"TX GRP HW BLK DN", \
+	"TX GRP HW UNBLK", \
+	"TX GRP HW UNBLK DN"
+FTDM_STR2ENUM_P(ftmod_ss7_blk_state2flag, ftmod_ss7_blk_flag2str, sng_ckt_block_flag_t)
 
 /* valid for every cfg array except circuits */
 typedef enum {
@@ -594,11 +715,16 @@ int ftmod_ss7_shutdown_isup(void);
 int ftmod_ss7_shutdown_mtp3(void);
 int ftmod_ss7_shutdown_mtp2(void);
 int ftmod_ss7_shutdown_relay(void);
+int ftmod_ss7_disable_relay_channel(uint32_t chanId);
 
 int ftmod_ss7_disable_grp_mtp3Link(uint32_t procId);
 int ftmod_ss7_enable_grp_mtp3Link(uint32_t procId);
 
 int ftmod_ss7_disable_grp_mtp2Link(uint32_t procId);
+
+int ftmod_ss7_block_isup_ckt(uint32_t cktId);
+int ftmod_ss7_unblock_isup_ckt(uint32_t cktId);
+
 
 /* in ftmod_sangoma_ss7_sta.c */
 int ftmod_ss7_mtp1link_sta(uint32_t id, L1Mngmt *cfm);
@@ -607,6 +733,7 @@ int ftmod_ss7_mtp3link_sta(uint32_t id, SnMngmt *cfm);
 int ftmod_ss7_mtplinkSet_sta(uint32_t id, SnMngmt *cfm);
 int ftmod_ss7_isup_intf_sta(uint32_t id, uint8_t *status);
 int ftmod_ss7_relay_status(uint32_t id, RyMngmt *cfm);
+int ftmod_ss7_isup_ckt_sta(uint32_t id, unsigned char *state);
 
 
 /* in ftmod_sangoma_ss7_out.c */
@@ -628,6 +755,9 @@ void ft_to_sngss7_cgba(ftdm_channel_t * ftdmchan);
 void ft_to_sngss7_cgua(ftdm_channel_t * ftdmchan);
 void ft_to_sngss7_cgb(ftdm_channel_t * ftdmchan);
 void ft_to_sngss7_cgu(ftdm_channel_t * ftdmchan);
+void ft_to_sngss7_itx (ftdm_channel_t * ftdmchan);
+void ft_to_sngss7_txa (ftdm_channel_t * ftdmchan);
+
 
 /* in ftmod_sangoma_ss7_in.c */
 void sngss7_sta_ind(uint32_t suInstId, uint32_t spInstId, uint32_t circuit, uint8_t globalFlg, uint8_t evntType, SiStaEvnt *siStaEvnt);
@@ -644,6 +774,10 @@ void sngss7_umsg_ind(uint32_t suInstId, uint32_t spInstId, uint32_t circuit);
 void sngss7_resm_ind(uint32_t suInstId, uint32_t spInstId, uint32_t circuit, SiResmEvnt *siResmEvnt);
 void sngss7_susp_ind(uint32_t suInstId, uint32_t spInstId, uint32_t circuit, SiSuspEvnt *siSuspEvnt);
 void sngss7_ssp_sta_cfm(uint32_t infId);
+
+ftdm_status_t sngss7_bufferzero_iam(SiConEvnt *siConEvnt);
+ftdm_status_t sngss7_retrieve_iam(ftdm_channel_t *ftdmchan, SiConEvnt *siConEvnt);
+ftdm_status_t sngss7_save_iam(ftdm_channel_t *ftdmchan, SiConEvnt *siConEvnt);
 
 /* in ftmod_sangoma_ss7_handle.c */
 ftdm_status_t handle_con_ind(uint32_t suInstId, uint32_t spInstId, uint32_t circuit, SiConEvnt *siConEvnt);
@@ -685,15 +819,27 @@ int ftmod_ss7_parse_xml(ftdm_conf_parameter_t *ftdm_parameters, ftdm_span_t *spa
 ftdm_status_t ftdm_sngss7_handle_cli_cmd(ftdm_stream_handle_t *stream, const char *data);
 
 /* in ftmod_sangoma_ss7_support.c */
-uint8_t copy_cgPtyNum_from_sngss7(ftdm_caller_data_t *ftdm, SiCgPtyNum *cgPtyNum);
-uint8_t copy_cgPtyNum_to_sngss7(ftdm_caller_data_t *ftdm, SiCgPtyNum *cgPtyNum);
-uint8_t copy_cdPtyNum_from_sngss7(ftdm_caller_data_t *ftdm, SiCdPtyNum *cdPtyNum);
-uint8_t copy_cdPtyNum_to_sngss7(ftdm_caller_data_t *ftdm, SiCdPtyNum *cdPtyNum);
-uint8_t copy_tknStr_from_sngss7(TknStr str, char *ftdm, TknU8 oddEven);
-uint8_t append_tknStr_from_sngss7(TknStr str, char *ftdm, TknU8 oddEven);
+ftdm_status_t copy_cgPtyNum_from_sngss7(ftdm_channel_t *ftdmchan, SiCgPtyNum *cgPtyNum);
+ftdm_status_t copy_cgPtyNum_to_sngss7(ftdm_channel_t *ftdmchan, SiCgPtyNum *cgPtyNum);
+ftdm_status_t copy_cdPtyNum_from_sngss7(ftdm_channel_t *ftdmchan, SiCdPtyNum *cdPtyNum);
+ftdm_status_t copy_cdPtyNum_to_sngss7(ftdm_channel_t *ftdmchan, SiCdPtyNum *cdPtyNum);
+ftdm_status_t copy_redirgNum_to_sngss7(ftdm_channel_t *ftdmchan, SiRedirNum *redirgNum);
+ftdm_status_t copy_redirgNum_from_sngss7(ftdm_channel_t *ftdmchan, SiRedirNum *redirgNum);
+ftdm_status_t copy_genNmb_to_sngss7(ftdm_channel_t *ftdmchan, SiGenNum *genNmb);
+ftdm_status_t copy_genNmb_from_sngss7(ftdm_channel_t *ftdmchan, SiGenNum *genNmb);
+ftdm_status_t copy_cgPtyCat_to_sngss7(ftdm_channel_t *ftdmchan, SiCgPtyCat *cgPtyCat);
+ftdm_status_t copy_cgPtyCat_from_sngss7(ftdm_channel_t *ftdmchan, SiCgPtyCat *cgPtyCat);
+ftdm_status_t copy_accTrnspt_to_sngss7(ftdm_channel_t *ftdmchan, SiAccTrnspt *accTrnspt);
+ftdm_status_t copy_natConInd_to_sngss7(ftdm_channel_t *ftdmchan, SiNatConInd *natConInd);
+ftdm_status_t copy_fwdCallInd_to_sngss7(ftdm_channel_t *ftdmchan, SiFwdCallInd *fwdCallInd);
+ftdm_status_t copy_txMedReq_to_sngss7(ftdm_channel_t *ftdmchan, SiTxMedReq *txMedReq);
+ftdm_status_t copy_usrServInfoA_to_sngss7(ftdm_channel_t *ftdmchan, SiUsrServInfo *usrServInfoA);
+
+ftdm_status_t copy_tknStr_from_sngss7(TknStr str, char *ftdm, TknU8 oddEven);
+ftdm_status_t append_tknStr_from_sngss7(TknStr str, char *ftdm, TknU8 oddEven);
+ftdm_status_t copy_tknStr_to_sngss7(char* str, TknStr *tknStr, TknU8 *oddEven);
 
 int check_for_state_change(ftdm_channel_t *ftdmchan);
-int check_cics_in_range(sngss7_chan_data_t *sngss7_info);
 int check_for_reset(sngss7_chan_data_t *sngss7_info);
 ftdm_status_t extract_chan_data(uint32_t circuit, sngss7_chan_data_t **sngss7_info, ftdm_channel_t **ftdmchan);
 unsigned long get_unique_id(void);
@@ -723,12 +869,26 @@ int find_ssf_type_in_map(const char *ssfType);
 int find_cic_cntrl_in_map(const char *cntrlType);
 
 ftdm_status_t check_status_of_all_isup_intf(void);
+ftdm_status_t check_for_reconfig_flag(ftdm_span_t *ftdmspan);
+
+void sngss7_send_signal(sngss7_chan_data_t *sngss7_info, ftdm_signal_event_t event_id);
+void sngss7_set_sig_status(sngss7_chan_data_t *sngss7_info, ftdm_signaling_status_t status);
+ftdm_status_t sngss7_add_var(sngss7_chan_data_t *ss7_info, const char* var, const char* val);
+ftdm_status_t sngss7_add_raw_data(sngss7_chan_data_t *sngss7_info, uint8_t* data, ftdm_size_t data_len);
 
 /* in ftmod_sangoma_ss7_timers.c */
 void handle_isup_t35(void *userdata);
+
 /******************************************************************************/
 
 /* MACROS *********************************************************************/
+#define SS7_STATE_CHANGE(ftdmchan, new_state) \
+if (ftdmchan->state == new_state) { \
+	ftdm_set_state(ftdmchan, FTDM_CHANNEL_STATE_IDLE); \
+} else { \
+	ftdm_set_state(ftdmchan, new_state); \
+}
+
 #define SS7_DEBUG(a,...)	ftdm_log(FTDM_LOG_DEBUG,a , ##__VA_ARGS__ );
 #define SS7_INFO(a,...)	 ftdm_log(FTDM_LOG_INFO,a , ##__VA_ARGS__ );
 #define SS7_WARN(a,...)	 ftdm_log(FTDM_LOG_WARNING,a , ##__VA_ARGS__ );
@@ -782,31 +942,31 @@ void handle_isup_t35(void *userdata);
 #define SS7_FUNC_TRACE_EXIT(a) if (g_ftdm_sngss7_data.function_trace) { \
 									switch (g_ftdm_sngss7_data.function_trace_level) { \
 										case 0: \
-											ftdm_log(FTDM_LOG_EMERG,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_EMERG,"Exiting %s\n", a); \
 											break; \
 										case 1: \
-											ftdm_log(FTDM_LOG_ALERT,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_ALERT,"Exiting %s\n", a); \
 											break; \
 										case 2: \
-											ftdm_log(FTDM_LOG_CRIT,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_CRIT,"Exiting %s\n", a); \
 											break; \
 										case 3: \
-											ftdm_log(FTDM_LOG_ERROR,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_ERROR,"Exiting %s\n", a); \
 											break; \
 										case 4: \
-											ftdm_log(FTDM_LOG_WARNING,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_WARNING,"Exiting %s\n", a); \
 											break; \
 										case 5: \
-											ftdm_log(FTDM_LOG_NOTICE,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_NOTICE,"Exiting %s\n", a); \
 											break; \
 										case 6: \
-											ftdm_log(FTDM_LOG_INFO,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_INFO,"Exiting %s\n", a); \
 											break; \
 										case 7: \
-											ftdm_log(FTDM_LOG_DEBUG,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_DEBUG,"Exiting %s\n", a); \
 											break; \
 										default: \
-											ftdm_log(FTDM_LOG_INFO,"Exitting %s\n", a); \
+											ftdm_log(FTDM_LOG_INFO,"Exiting %s\n", a); \
 											break; \
 										} /* switch (g_ftdm_sngss7_data.function_trace_level) */ \
 								} /*  if(g_ftdm_sngss7_data.function_trace) */
@@ -859,6 +1019,10 @@ void handle_isup_t35(void *userdata);
 #define sngss7_test_ckt_flag(obj, flag)  ((obj)->ckt_flags & flag)
 #define sngss7_clear_ckt_flag(obj, flag) ((obj)->ckt_flags &= ~(flag))
 #define sngss7_set_ckt_flag(obj, flag)   ((obj)->ckt_flags |= (flag))
+
+#define sngss7_test_ckt_blk_flag(obj, flag)  ((obj)->blk_flags & flag)
+#define sngss7_clear_ckt_blk_flag(obj, flag) ((obj)->blk_flags &= ~(flag))
+#define sngss7_set_ckt_blk_flag(obj, flag)   ((obj)->blk_flags |= (flag))
 
 #define sngss7_test_options(obj, option) ((obj)->options & option)
 #define sngss7_clear_options(obj, option) ((obj)->options &= ~(option))

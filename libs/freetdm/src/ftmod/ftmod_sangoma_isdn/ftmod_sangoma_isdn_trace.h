@@ -211,7 +211,7 @@ struct code2str dcodQ931CallRefLoTable[] = {
 #define PROT_Q931_MSGTYPE_DISCONNECT		69
 #define PROT_Q931_MSGTYPE_RESTART			70
 #define PROT_Q931_MSGTYPE_RELEASE			77
-#define PROT_Q931_MSGTYPE_RELEASE_ACK		78
+#define PROT_Q931_MSGTYPE_RESTART_ACK		78
 #define PROT_Q931_MSGTYPE_RELEASE_COMPLETE	90
 #define PROT_Q931_MSGTYPE_SEGMENT			96
 #define PROT_Q931_MSGTYPE_FACILITY			98
@@ -240,7 +240,7 @@ struct code2str dcodQ931MsgTypeTable[] = {
 	{PROT_Q931_MSGTYPE_DISCONNECT, "DISCONNECT"},
 	{PROT_Q931_MSGTYPE_RESTART, "RESTART"},
 	{PROT_Q931_MSGTYPE_RELEASE, "RELEASE"},
-	{PROT_Q931_MSGTYPE_RELEASE_ACK, "RELEASR ACK"},
+	{PROT_Q931_MSGTYPE_RESTART_ACK, "RESTART ACK"},
 	{PROT_Q931_MSGTYPE_RELEASE_COMPLETE, "RELEASE COMPLETE"},
 	{PROT_Q931_MSGTYPE_SEGMENT, "SEGMENT"},
 	{PROT_Q931_MSGTYPE_FACILITY, "FACILITY"},
@@ -578,5 +578,22 @@ struct code2str dcodQ931TypeOfSubaddressTable[] = {
 	{ -1,   "Invalid"},
 };
 
-#endif /* __FTMOD_SANGOMA_ISDN_TRACE_H__ */
+struct code2str dcodQ931DisplayTypeTable[] = {
+	{ 0x00, "Calling Party Name"},
+	{ 0x01, "Connected Party Name"},
+	{ 0x05, "Original Called Party Name"},
+	{ -1,   "Invalid"},
+};
 
+struct code2str dcodQ931AssocInfoTable[] = {
+	{ 0x00, "Requested"},
+	{ 0x03, "Included"},
+	{ -1,   "Invalid"},
+};
+
+
+struct code2str dcodQ931NotificationIndTable[] = {
+	{ 0x71, "Call Information/event"},
+	{ -1,   "Invalid"},
+};
+#endif /* __FTMOD_SANGOMA_ISDN_TRACE_H__ */

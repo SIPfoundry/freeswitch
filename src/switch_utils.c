@@ -465,6 +465,7 @@ SWITCH_DECLARE(switch_status_t) switch_b64_encode(unsigned char *in, switch_size
 	for (x = 0; x < ilen; x++) {
 		b = (b << 8) + in[x];
 		l += 8;
+
 		while (l >= 6) {
 			out[bytes++] = switch_b64_table[(b >> (l -= 6)) % 64];
 			if (++y != 72) {
@@ -569,7 +570,11 @@ SWITCH_DECLARE(switch_bool_t) switch_simple_email(const char *to,
 			char cmd[1024] = "";
 			switch_snprintf(cmd, sizeof(cmd), "%s %s %s", convert_cmd, file, newfile);
 			switch_system(cmd, SWITCH_TRUE);
-			file = newfile;
+			if (strcmp(file, newfile)) {
+				file = newfile;
+			} else {
+				switch_safe_free(newfile);
+			}
 		}
 
 		switch_safe_free(dupfile);
@@ -654,8 +659,10 @@ SWITCH_DECLARE(switch_bool_t) switch_simple_email(const char *to,
 				}
 				if (write(fd, &out, bytes) != bytes) {
 					rval = -1;
-				} else
+					break;
+				} else {
 					bytes = 0;
+				}
 
 			}
 
@@ -1329,11 +1336,17 @@ SWITCH_DECLARE(switch_time_t) switch_str_time(const char *in)
 	char replace[1024] = "";
 	switch_time_t ret = 0;
 	char *pattern = "^(\\d+)-(\\d+)-(\\d+)\\s*(\\d*):{0,1}(\\d*):{0,1}(\\d*)";
+	char *pattern2 = "^(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})";
 
 	switch_time_exp_lt(&tm, switch_micro_time_now());
 	tm.tm_year = tm.tm_mon = tm.tm_mday = tm.tm_hour = tm.tm_min = tm.tm_sec = 0;
 
-	if ((proceed = switch_regex_perform(in, pattern, &re, ovector, sizeof(ovector) / sizeof(ovector[0])))) {
+	if (!(proceed = switch_regex_perform(in, pattern, &re, ovector, sizeof(ovector) / sizeof(ovector[0])))) {
+		switch_regex_safe_free(re);
+		proceed = switch_regex_perform(in, pattern2, &re, ovector, sizeof(ovector) / sizeof(ovector[0]));
+	}
+	
+	if (proceed) {
 
 		if (proceed > 1) {
 			switch_regex_copy_substring(in, ovector, proceed, 1, replace, sizeof(replace));
@@ -1365,10 +1378,14 @@ SWITCH_DECLARE(switch_time_t) switch_str_time(const char *in)
 			tm.tm_sec = atoi(replace);
 		}
 
+		switch_regex_safe_free(re);
+
 		switch_time_exp_gmt_get(&ret, &tm);
 		return ret;
 	}
-	/* possible else with more patterns later */
+
+	switch_regex_safe_free(re);
+
 	return ret;
 }
 
@@ -1858,8 +1875,10 @@ static char *cleanup_separated_string(char *str, char delim)
 			}
 		}
 		if (!esc) {
-			if (*ptr == '\'') {
-				inside_quotes = (1 - inside_quotes);
+			if (*ptr == '\'' && (inside_quotes || ((ptr+1) && strchr(ptr+1, '\'')))) {
+				if ((inside_quotes = (1 - inside_quotes))) {
+					end = dest;
+				}
 			} else {
 				*dest++ = *ptr;
 				if (*ptr != ' ' || inside_quotes) {
@@ -1919,7 +1938,7 @@ static unsigned int separate_string_char_delim(char *buf, char delim, char **arr
 			/* escaped characters are copied verbatim to the destination string */
 			if (*ptr == ESCAPE_META) {
 				++ptr;
-			} else if (*ptr == '\'') {
+			} else if (*ptr == '\'' && (inside_quotes || ((ptr+1) && strchr(ptr+1, '\'')))) {
 				inside_quotes = (1 - inside_quotes);
 			} else if (*ptr == delim && !inside_quotes) {
 				*ptr = '\0';
@@ -1930,11 +1949,11 @@ static unsigned int separate_string_char_delim(char *buf, char delim, char **arr
 		}
 	}
 	/* strip quotes, escaped chars and leading / trailing spaces */
-	if (count > 1) {
-		for (i = 0; i < count; ++i) {
-			array[i] = cleanup_separated_string(array[i], delim);
-		}
+
+	for (i = 0; i < count; ++i) {
+		array[i] = cleanup_separated_string(array[i], delim);
 	}
+
 	return count;
 }
 
@@ -1990,11 +2009,11 @@ static unsigned int separate_string_blank_delim(char *buf, char **array, unsigne
 		}
 	}
 	/* strip quotes, escaped chars and leading / trailing spaces */
-	if (count > 1) {
-		for (i = 0; i < count; ++i) {
-			array[i] = cleanup_separated_string(array[i], 0);
-		}
+
+	for (i = 0; i < count; ++i) {
+		array[i] = cleanup_separated_string(array[i], 0);
 	}
+	
 	return count;
 }
 
@@ -2579,13 +2598,13 @@ SWITCH_DECLARE(int) switch_isxdigit(int c)
 	return (c < 0 ? 0 : c > 255 ? 0 : ((_switch_ctype_ + 1)[(unsigned char) c] & (_N | _X)));
 }
 static const char *DOW[] = {
-	"sat",
 	"sun",
 	"mon",
 	"tue",
 	"wed",
 	"thu",
-	"fri"
+	"fri",
+	"sat"
 };
 
 SWITCH_DECLARE(const char *) switch_dow_int2str(int val) {
@@ -2601,7 +2620,7 @@ SWITCH_DECLARE(int) switch_dow_str2int(const char *exp) {
 	
 	for (x = 0; x < switch_arraylen(DOW); x++) {
 		if (!strncasecmp(DOW[x], exp, 3)) {
-			ret = x;
+			ret = x + 1;
 			break;
 		}
 	}
@@ -2611,13 +2630,13 @@ SWITCH_DECLARE(int) switch_dow_str2int(const char *exp) {
 typedef enum {
 	DOW_ERR = -2,
 	DOW_EOF = -1,
-	DOW_SAT = 0,
-	DOW_SUN,
+	DOW_SUN = 1,
 	DOW_MON,
 	DOW_TUE,
 	DOW_WED,
 	DOW_THU,
 	DOW_FRI,
+	DOW_SAT,
 	DOW_HYPHEN = '-',
 	DOW_COMA = ','
 } dow_t;
@@ -2632,7 +2651,7 @@ static inline dow_t _dow_read_token(const char **s)
 	} else if (**s == ',') {
 		(*s)++;
 		return DOW_COMA;
-	} else if (**s >= '0' && **s <= '9') {
+	} else if (**s >= '1' && **s <= '7') {
 		dow_t r = **s - '0';
 		(*s)++;
 		return r;
@@ -2659,19 +2678,13 @@ SWITCH_DECLARE(switch_bool_t) switch_dow_cmp(const char *exp, int val)
 			/* Save the previous token and move to the next one */
 			range_start = prev;
 		} else if (cur == DOW_ERR) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Parse error for [%s] at position %td (%.6s)\n", exp, p - exp, p);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Parse error for [%s] at position %ld (%.6s)\n", exp, (long) (p - exp), p);
 			break;
 		} else {
 			/* Valid day found */
 			if (range_start != DOW_EOF) { /* Evaluating a range */
-				if (range_start < cur) {
-					if (val >= range_start && val <= cur) {
-						return SWITCH_TRUE;
-					}
-				} else {
-					if (val >= cur && val <= range_start) {
-						return SWITCH_TRUE;
-					}
+				if (val >= range_start && val <= cur) {
+					return SWITCH_TRUE;
 				}
 				range_start = DOW_EOF;
 			} else if (val == cur) {
@@ -2809,6 +2822,21 @@ SWITCH_DECLARE(int) switch_split_user_domain(char *in, char **user, char **domai
 	}
 
 	return 1;
+}
+
+
+SWITCH_DECLARE(char *) switch_uuid_str(char *buf, switch_size_t len)
+{
+	switch_uuid_t uuid;
+
+	if (len < (SWITCH_UUID_FORMATTED_LENGTH + 1)) {
+		switch_snprintf(buf, len, "INVALID");
+	} else {
+		switch_uuid_get(&uuid);
+		switch_uuid_format(buf, &uuid);
+	}
+
+	return buf;
 }
 
 

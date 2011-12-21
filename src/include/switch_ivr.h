@@ -62,6 +62,12 @@ SWITCH_BEGIN_EXTERN_C struct switch_unicast_conninfo {
 };
 typedef struct switch_unicast_conninfo switch_unicast_conninfo_t;
 
+#define SWITCH_IVR_VERIFY_SILENCE_DIVISOR(divisor) \
+	{ \
+		if ((divisor) <= 0 && (divisor) != -1) { \
+			divisor = 400; \
+		} \
+	}
 
 /**
  * @defgroup switch_ivr IVR Library
@@ -104,6 +110,8 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_parse_event(_In_ switch_core_session_
 SWITCH_DECLARE(switch_status_t) switch_ivr_parse_all_events(switch_core_session_t *session);
 SWITCH_DECLARE(switch_status_t) switch_ivr_parse_next_event(switch_core_session_t *session);
 SWITCH_DECLARE(switch_status_t) switch_ivr_parse_all_messages(switch_core_session_t *session);
+SWITCH_DECLARE(switch_status_t) switch_ivr_parse_all_signal_data(switch_core_session_t *session);
+SWITCH_DECLARE(switch_status_t) switch_ivr_process_indications(switch_core_session_t *session, switch_core_session_message_t *message);
 
 /*!
   \brief Wait for time to pass for a specified number of milliseconds
@@ -401,7 +409,8 @@ SWITCH_DECLARE(switch_status_t) switch_play_and_get_digits(switch_core_session_t
 														   const char *bad_input_audio_file,
 														   const char *var_name, char *digit_buffer, uint32_t digit_buffer_length,
 														   const char *digits_regex,
-														   uint32_t digit_timeout);
+														   uint32_t digit_timeout,
+														   const char *transfer_on_failure);
 
 SWITCH_DECLARE(switch_status_t) switch_ivr_speak_text_handle(switch_core_session_t *session,
 															 switch_speech_handle_t *sh,
@@ -455,7 +464,8 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_enterprise_originate(switch_core_sess
 																const char *cid_name_override,
 																const char *cid_num_override,
 																switch_caller_profile_t *caller_profile_override,
-																switch_event_t *ovars, switch_originate_flag_t flags);
+																switch_event_t *ovars, switch_originate_flag_t flags,
+																switch_call_cause_t *cancel_cause);
 
 SWITCH_DECLARE(void) switch_ivr_bridge_display(switch_core_session_t *session, switch_core_session_t *peer_session);
 
@@ -859,6 +869,16 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_say(switch_core_session_t *session,
 											   const char *say_gender,
 											   switch_input_args_t *args);
 
+SWITCH_DECLARE(switch_status_t) switch_ivr_say_string(switch_core_session_t *session,
+													  const char *lang,
+													  const char *ext,
+													  const char *tosay,
+													  const char *module_name,
+													  const char *say_type,
+													  const char *say_method,
+													  const char *say_gender,
+													  char **rstr);
+
 SWITCH_DECLARE(switch_say_method_t) switch_ivr_get_say_method_by_name(const char *name);
 SWITCH_DECLARE(switch_say_gender_t) switch_ivr_get_say_gender_by_name(const char *name);
 SWITCH_DECLARE(switch_say_type_t) switch_ivr_get_say_type_by_name(const char *name);
@@ -876,6 +896,7 @@ SWITCH_DECLARE(switch_bool_t) switch_ivr_uuid_exists(const char *uuid);
 
 
 
+SWITCH_DECLARE(const char *) switch_ivr_dmachine_get_name(switch_ivr_dmachine_t *dmachine);
 SWITCH_DECLARE(void) switch_ivr_dmachine_set_match_callback(switch_ivr_dmachine_t *dmachine, switch_ivr_dmachine_callback_t match_callback);
 SWITCH_DECLARE(void) switch_ivr_dmachine_set_nonmatch_callback(switch_ivr_dmachine_t *dmachine, switch_ivr_dmachine_callback_t nonmatch_callback);
 SWITCH_DECLARE(switch_status_t) switch_ivr_dmachine_create(switch_ivr_dmachine_t **dmachine_p, 
@@ -910,6 +931,10 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_get_file_handle(switch_core_session_t
 SWITCH_DECLARE(switch_status_t) switch_ivr_release_file_handle(switch_core_session_t *session, switch_file_handle_t **fh);
 SWITCH_DECLARE(switch_status_t) switch_ivr_process_fh(switch_core_session_t *session, const char *cmd, switch_file_handle_t *fhp);
 SWITCH_DECLARE(switch_status_t) switch_ivr_insert_file(switch_core_session_t *session, const char *file, const char *insert_file, switch_size_t sample_point);
+
+SWITCH_DECLARE(switch_status_t) switch_ivr_create_message_reply(switch_event_t **reply, switch_event_t *message, const char *new_proto);
+SWITCH_DECLARE(char *) switch_ivr_check_presence_mapping(const char *exten_name, const char *domain_name);
+SWITCH_DECLARE(switch_status_t) switch_ivr_kill_uuid(const char *uuid, switch_call_cause_t cause);
 
 /** @} */
 

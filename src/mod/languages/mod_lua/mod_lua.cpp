@@ -80,7 +80,7 @@ static int traceback(lua_State * L)
 	return 1;
 }
 
-static int docall(lua_State * L, int narg, int clear)
+int docall(lua_State * L, int narg, int clear, int perror)
 {
 	int status;
 	int base = lua_gettop(L) - narg;	/* function index */
@@ -92,11 +92,20 @@ static int docall(lua_State * L, int narg, int clear)
 
 	lua_remove(L, base);		/* remove traceback function */
 	/* force a complete garbage collection in case of errors */
-	if (status != 0)
+	if (status != 0) {
 		lua_gc(L, LUA_GCCOLLECT, 0);
+	}
+
+	if (status && perror) {
+		const char *err = lua_tostring(L, -1);
+		if (!zstr(err)) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "%s\n", err);
+		}
+		lua_pop(L, 1); /* pop error message from the stack */
+	}
+
 	return status;
 }
-
 
 
 static lua_State *lua_init(void)
@@ -111,7 +120,7 @@ static lua_State *lua_init(void)
 		luaopen_freeswitch(L);
 		lua_gc(L, LUA_GCRESTART, 0);
 		lua_atpanic(L, panic);
-		error = luaL_loadbuffer(L, buff, strlen(buff), "line") || docall(L, 0, 1);
+		error = luaL_loadbuffer(L, buff, strlen(buff), "line") || docall(L, 0, 1, 0);
 	}
 	return L;
 }
@@ -128,7 +137,7 @@ static int lua_parse_and_execute(lua_State * L, char *input_code)
 
 	if (*input_code == '~') {
 		char *buff = input_code + 1;
-		error = luaL_loadbuffer(L, buff, strlen(buff), "line") || docall(L, 0, 1);	//lua_pcall(L, 0, 0, 0);
+		error = luaL_loadbuffer(L, buff, strlen(buff), "line") || docall(L, 0, 1, 0);	//lua_pcall(L, 0, 0, 0);
 	} else {
 		char *args = strchr(input_code, ' ');
 		if (args) {
@@ -141,9 +150,9 @@ static int lua_parse_and_execute(lua_State * L, char *input_code)
 				switch_stream_handle_t stream = { 0 };
 				SWITCH_STANDARD_STREAM(stream);
 
-				stream.write_function(&stream, " argv = {[0]='%s', ", input_code);
+				stream.write_function(&stream, " argv = {[0]='%y', ", input_code);
 				for (x = 0; x < argc; x++) {
-					stream.write_function(&stream, "'%s'%s", argv[x], x == argc - 1 ? "" : ", ");
+					stream.write_function(&stream, "'%y'%s", argv[x], x == argc - 1 ? "" : ", ");
 				}
 				stream.write_function(&stream, " };");
 				code = (char *) stream.data;
@@ -152,14 +161,14 @@ static int lua_parse_and_execute(lua_State * L, char *input_code)
 			}
 
 			if (code) {
-				error = luaL_loadbuffer(L, code, strlen(code), "line") || docall(L, 0, 1);
+				error = luaL_loadbuffer(L, code, strlen(code), "line") || docall(L, 0, 1, 0);
 				switch_safe_free(code);
 			}
 		} else {
 			// Force empty argv table
 			char *code = NULL;
 			code = switch_mprintf("argv = {[0]='%s'};", input_code);
-			error = luaL_loadbuffer(L, code, strlen(code), "line") || docall(L, 0, 1);
+			error = luaL_loadbuffer(L, code, strlen(code), "line") || docall(L, 0, 1, 0);
 			switch_safe_free(code);
 		}
 
@@ -171,7 +180,7 @@ static int lua_parse_and_execute(lua_State * L, char *input_code)
 				switch_assert(fdup);
 				file = fdup;
 			}
-			error = luaL_loadfile(L, file) || docall(L, 0, 1);
+			error = luaL_loadfile(L, file) || docall(L, 0, 1, 0);
 			switch_safe_free(fdup);
 		}
 	}
@@ -421,6 +430,24 @@ SWITCH_STANDARD_API(luarun_api_function)
 	return SWITCH_STATUS_SUCCESS;
 }
 
+SWITCH_STANDARD_CHAT_APP(lua_chat_function)
+{
+	lua_State *L = lua_init();
+	char *dup = NULL;
+
+	if (data) {
+		dup = strdup(data);
+	}
+
+	mod_lua_conjure_event(L, message, "message", 1);
+	lua_parse_and_execute(L, (char *)dup);
+	lua_uninit(L);
+
+	switch_safe_free(dup);
+
+	return SWITCH_STATUS_SUCCESS;
+
+}
 
 SWITCH_STANDARD_API(lua_api_function)
 {
@@ -582,6 +609,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_lua_load)
 	switch_api_interface_t *api_interface;
 	switch_application_interface_t *app_interface;
 	switch_dialplan_interface_t *dp_interface;
+	switch_chat_application_interface_t *chat_app_interface;
 
 	/* connect my internal structure to the blank pointer passed to me */
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
@@ -591,6 +619,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_lua_load)
 	SWITCH_ADD_APP(app_interface, "lua", "Launch LUA ivr", "Run a lua ivr on a channel", lua_function, "<script>", SAF_SUPPORT_NOMEDIA | SAF_ROUTING_EXEC);
 	SWITCH_ADD_DIALPLAN(dp_interface, "LUA", lua_dialplan_hunt);
 
+	SWITCH_ADD_CHAT_APP(chat_app_interface, "lua", "execute a lua script", "execute a lua script", lua_chat_function, "<script>", SCAF_NONE);
 
 
 	globals.pool = pool;
