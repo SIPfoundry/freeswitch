@@ -2372,16 +2372,6 @@ static void do_2833(switch_rtp_t *rtp_session, switch_core_session_t *session)
 			rtp_session->sending_dtmf = 2;
 			return;
 		}
-		
-		if (rtp_session->queue_delay) {
-			return;
-		}
-
-
-		if (!rtp_session->sending_dtmf) {
-			rtp_session->sending_dtmf = 2;
-			return;
-		}
 
 		if (switch_queue_trypop(rtp_session->dtmf_data.dtmf_queue, &pop) == SWITCH_STATUS_SUCCESS) {
 			switch_dtmf_t *rdigit = pop;

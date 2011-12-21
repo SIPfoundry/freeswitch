@@ -37017,3 +37017,4 @@ SWIGEXPORT CoreSession * SWIGSTDCALL CSharp_ManagedSessionUpcast(ManagedSession 
 #ifdef __cplusplus
 }
 #endif
+

@@ -1395,14 +1395,6 @@ static void *SWITCH_THREAD_FUNC conference_thread_run(switch_thread_t *thread, v
 				if (switch_test_flag(imember, MFLAG_NOMOH)) {
 					nomoh++;
 				}
-				
-				if (switch_test_flag(imember, MFLAG_VIDEO_BRIDGE)) {
-					if (!video_bridge_members[0]) {
-						video_bridge_members[0] = imember;
-					} else {
-						video_bridge_members[1] = imember;
-					}
-				}
 			}
 
 			switch_clear_flag_locked(imember, MFLAG_HAS_AUDIO);

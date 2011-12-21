@@ -620,18 +620,6 @@ void sofia_handle_sip_i_bye(switch_core_session_t *session, int status,
 	} 
 
 
-	if (!(vval = switch_channel_get_variable(channel, "sip_copy_custom_headers")) || switch_true(vval)) { 
-		switch_core_session_t *nsession = NULL; 
-		
-		switch_core_session_get_partner(session, &nsession); 
-		
-		if (nsession) { 
-			switch_ivr_transfer_variable(session, nsession, SOFIA_SIP_BYE_HEADER_PREFIX_T); 
-			switch_core_session_rwunlock(nsession); 
-		} 
-	} 
-
-
 	switch_channel_hangup(channel, cause);
 	nua_respond(nh, SIP_200_OK, NUTAG_WITH_THIS_MSG(de->data->e_msg),
 				TAG_IF(call_info, SIPTAG_CALL_INFO_STR(call_info)), TAG_IF(!zstr(extra_headers), SIPTAG_HEADER_STR(extra_headers)), TAG_END());
