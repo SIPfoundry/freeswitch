@@ -73,7 +73,7 @@
     <param name="watchdog-step-timeout" value="30000"/>
     <param name="watchdog-event-timeout" value="30000"/>
 
-    <param name="log-auth-failures" value="true"/>
+    <param name="log-auth-failures" value="false"/>
     <param name="forward-unsolicited-mwi-notify" value="false"/>
 
     <param name="context" value="public"/>
@@ -157,6 +157,7 @@
     <!-- Name of the db to use for this profile -->
     <!--<param name="dbname" value="share_presence"/>-->
     <param name="presence-hosts" value="$${domain},$${local_ip_v4}"/>
+    <param name="presence-privacy" value="$${presence_privacy}"/>
     <!-- ************************************************* -->
     
     <!-- This setting is for AAL2 bitpacking on G726 -->
@@ -175,12 +176,25 @@
 
     <!-- TLS: disabled by default, set to "true" to enable -->
     <param name="tls" value="$${internal_ssl_enable}"/>
+    <!-- Set to true to not bind on the normal sip-port but only on the TLS port -->
+    <param name="tls-only" value="false"/>
     <!-- additional bind parameters for TLS -->
     <param name="tls-bind-params" value="transport=tls"/>
     <!-- Port to listen on for TLS requests. (5061 will be used if unspecified) -->
     <param name="tls-sip-port" value="$${internal_tls_port}"/>
     <!-- Location of the agent.pem and cafile.pem ssl certificates (needed for TLS server) -->
     <param name="tls-cert-dir" value="$${internal_ssl_dir}"/>
+    <!-- Optionally set the passphrase password used by openSSL to encrypt/decrypt TLS private key files -->
+    <param name="tls-passphrase" value=""/>
+    <!-- Don't verify the date on TLS certificates -->
+    <param name="tls-verify-date" value="true"/>
+    <!-- TLS verify policy, when registering/inviting gateways with other servers (outbound) or handling inbound registration/invite requests how should we verify their certificate -->
+    <!-- set to 'in' to only verify incoming connections, 'out' to only verify outgoing connections, 'all' to verify all connections, also 'in_subjects', 'out_subjects' and 'all_subjects' for subject validation. Multiple policies can be split with a '|' pipe -->
+    <param name="tls-verify-policy" value="none"/>
+    <!-- Certificate max verify depth to use for validating peer TLS certificates when the verify policy is not none -->
+    <param name="tls-verify-depth" value="2"/>
+    <!-- If the tls-verify-policy is set to subjects_all or subjects_in this sets which subjects are allowed, multiple subjects can be split with a '|' pipe -->
+    <param name="tls-verify-in-subjects" value=""/>
     <!-- TLS version ("sslv23" (default), "tlsv1"). NOTE: Phones may not work with TLSv1 -->
     <param name="tls-version" value="$${sip_tls_version}"/>
 

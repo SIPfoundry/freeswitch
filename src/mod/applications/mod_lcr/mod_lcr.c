@@ -626,6 +626,8 @@ static int route_add_callback(void *pArg, int argc, char **argv, char **columnNa
 			if (!argv[i] || zstr(argv[i])) {
 				/* maybe we want to consider saying which carriers have null rate fields... maybe they can run the query and find out */
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "rate field is null, skipping\n");
+				/* kill prev/next pointers */
+				/* additional->prev = NULL; */
 				goto end;
 			}
 			additional->rate = (float)atof(switch_str_nil(argv[i]));
@@ -750,8 +752,16 @@ static int route_add_callback(void *pArg, int argc, char **argv, char **columnNa
 
 	/* lcr was not added to any lists, so destroy lcr object here */
 	if (lcr_skipped == SWITCH_TRUE) {
-		/* ensure we didn't accidentally add additional to the list */
-		switch_assert(additional->prev == NULL && current->next != additional);
+		/* complain loudly if we're asked to destroy a route that is
+		   added to the route list */
+		if (additional && additional->prev != NULL) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, 
+			                  "additional->prev != NULL\n");
+		}
+		if (current && current->next == additional) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, 
+			                  "current->next == additional\n");
+		}
 		lcr_destroy(additional);
 	}
 	
@@ -1525,7 +1535,14 @@ SWITCH_STANDARD_DIALPLAN(lcr_dialplan_hunt)
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "LCR Lookup on %s using profile %s\n", caller_profile->destination_number, caller_profile->context);
 	routes.lookup_number = caller_profile->destination_number;
-	routes.cid = (char *) caller_profile->caller_id_number;
+
+	if (caller_profile) {
+		routes.cid = (char *) switch_channel_get_variable(channel, "effective_caller_id_number");
+		if (!routes.cid) {
+			routes.cid = (char *) caller_profile->caller_id_number;
+		}
+	}
+
 	if (lcr_do_lookup(&routes) == SWITCH_STATUS_SUCCESS) {
 		if ((extension = switch_caller_extension_new(session, caller_profile->destination_number, caller_profile->destination_number)) == 0) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "memory error!\n");

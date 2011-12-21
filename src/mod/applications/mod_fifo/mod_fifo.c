@@ -298,6 +298,7 @@ struct fifo_node {
 	int caller_count;
 	int consumer_count;
 	int ring_consumer_count;
+	int member_count;
 	switch_time_t start_waiting;
 	uint32_t importance;
 	switch_thread_rwlock_t *rwlock;
@@ -522,13 +523,16 @@ static switch_status_t caller_read_frame_callback(switch_core_session_t *session
 			char buf[25] = "";
 			switch_channel_t *channel = switch_core_session_get_channel(session);
 			const char *caller_exit_key = switch_channel_get_variable(channel, "fifo_caller_exit_key");
+			switch_status_t status = SWITCH_STATUS_SUCCESS;
+			
 			args.input_callback = moh_on_dtmf;
 			args.buf = buf;
 			args.buflen = sizeof(buf);
 			args.read_frame_callback = chime_read_frame_callback;
 			args.user_data = user_data;
 
-			if (switch_ivr_play_file(session, NULL, cd->list[cd->index], &args) != SWITCH_STATUS_SUCCESS) {
+			status = switch_ivr_play_file(session, NULL, cd->list[cd->index], &args);
+			if (!SWITCH_READ_ACCEPTABLE(status)) {
 				return SWITCH_STATUS_BREAK;
 			}
 
@@ -638,9 +642,6 @@ static void cancel_caller_outbound_call(const char *key, switch_call_cause_t cau
 		*cancel_cause = cause;
 	}
 	switch_mutex_unlock(globals.caller_orig_mutex);
-
-	fifo_caller_del(key);
-
 }
 
 
@@ -851,9 +852,12 @@ static fifo_node_t *create_node(const char *name, uint32_t importance, switch_mu
 	cbt.len = sizeof(outbound_count);
 	sql = switch_mprintf("select count(*) from fifo_outbound where fifo_name = '%q'", name);
 	fifo_execute_sql_callback(mutex, sql, sql2str_callback, &cbt);
-	if (atoi(outbound_count) > 0) {
+    node->member_count = atoi(outbound_count);
+	if (node->member_count > 0) {
 		node->has_outbound = 1;
-	}
+	} else {
+        node->has_outbound = 0;
+    }
 	switch_safe_free(sql);
 
 	node->importance = importance;
@@ -1613,7 +1617,7 @@ static void *SWITCH_THREAD_FUNC o_thread_run(switch_thread_t *thread, void *obj)
 	if (status != SWITCH_STATUS_SUCCESS) {
 
 		sql = switch_mprintf("update fifo_outbound set ring_count=ring_count-1, "
-							 "outbound_fail_count=outbound_fail_count+1, next_avail=%ld + lag + 1 where uuid='%q' and use_count > 0",
+							 "outbound_fail_count=outbound_fail_count+1, next_avail=%ld + lag + 1 where uuid='%q'",
 							 (long) switch_epoch_time_now(NULL), h->uuid);
 		fifo_execute_sql(sql, globals.sql_mutex);
 		switch_safe_free(sql);
@@ -1921,20 +1925,6 @@ static int stop_node_thread(void)
 
 	return 0;
 }
-
-static void check_ocancel(switch_core_session_t *session)
-{
-	//switch_channel_t *channel;
-	//const char *var;
-
-	switch_assert(session);
-
-	//channel = switch_core_session_get_channel(session);
-
-	cancel_caller_outbound_call(switch_core_session_get_uuid(session), SWITCH_CAUSE_ORIGINATOR_CANCEL);
-
-}
-
 
 static void check_cancel(fifo_node_t *node)
 {
@@ -2291,11 +2281,11 @@ SWITCH_STANDARD_APP(fifo_function)
 	char *list_string;
 	int nlist_count;
 	char *nlist[MAX_NODES_PER_CONSUMER];
-	int consumer = 0;
+	int consumer = 0, in_table = 0;
 	const char *arg_fifo_name = NULL;
 	const char *arg_inout = NULL;
 	const char *serviced_uuid = NULL;
-
+	
 	if (!globals.running) {
 		return;
 	}
@@ -2468,6 +2458,7 @@ SWITCH_STANDARD_APP(fifo_function)
 
 		fifo_queue_push(node->fifo_list[p], call_event);
 		fifo_caller_add(node, session);
+		in_table = 1;
 
 		call_event = NULL;
 		switch_snprintf(tmp, sizeof(tmp), "%d", fifo_queue_size(node->fifo_list[p]));
@@ -2564,8 +2555,6 @@ SWITCH_STANDARD_APP(fifo_function)
 
 		switch_channel_clear_app_flag_key(FIFO_APP_KEY, channel, FIFO_APP_BRIDGE_TAG);
 
-		fifo_caller_del(switch_core_session_get_uuid(session));
-
 		if (!aborted && switch_channel_ready(channel)) {
 			switch_channel_set_state(channel, CS_HIBERNATE);
 			goto done;
@@ -2603,7 +2592,7 @@ SWITCH_STANDARD_APP(fifo_function)
 			}
 		}
 
-		check_ocancel(session);
+		cancel_caller_outbound_call(switch_core_session_get_uuid(session), SWITCH_CAUSE_ORIGINATOR_CANCEL);
 
 		goto done;
 
@@ -3213,6 +3202,10 @@ SWITCH_STANDARD_APP(fifo_function)
 	}
 
   done:
+
+	if (!consumer && in_table) {
+		fifo_caller_del(switch_core_session_get_uuid(session));
+	}
 
 	if (switch_true(switch_channel_get_variable(channel, "fifo_destroy_after_use"))) {
 		do_destroy = 1;
@@ -3839,7 +3832,7 @@ SWITCH_STANDARD_API(fifo_api_function)
 				switch_hash_this(hi, &var, NULL, &val);
 				node = (fifo_node_t *) val;
 				switch_mutex_lock(node->update_mutex);
-				stream->write_function(stream, "%s:%d:%d\n", (char *) var, node->consumer_count, node_caller_count(node));
+				stream->write_function(stream, "%s:%d:%d:%d:%d:%d\n", (char *) var, node->consumer_count, node_caller_count(node), node->member_count, node->ring_consumer_count, node_idle_consumers(node));
 				switch_mutex_unlock(node->update_mutex);
 				x++;
 			}
@@ -3849,7 +3842,7 @@ SWITCH_STANDARD_API(fifo_api_function)
 			}
 		} else if ((node = switch_core_hash_find(globals.fifo_hash, argv[1]))) {
 			switch_mutex_lock(node->update_mutex);
-			stream->write_function(stream, "%s:%d:%d\n", argv[1], node->consumer_count, node_caller_count(node));
+			stream->write_function(stream, "%s:%d:%d:%d:%d:%d\n", argv[1], node->consumer_count, node_caller_count(node), node->member_count, node->ring_consumer_count, node_idle_consumers(node));
 			switch_mutex_unlock(node->update_mutex);
 		} else {
 			stream->write_function(stream, "none\n");
@@ -4212,7 +4205,7 @@ static switch_status_t load_config(int reload, int del_all)
 				free(sql);
 				free(name_dup);
 				node->has_outbound = 1;
-
+				node->member_count++;
 			}
 			node->ready = 1;
 			node->is_static = 1;
@@ -4251,6 +4244,8 @@ static void fifo_member_add(char *fifo_name, char *originate_string, int simo_co
 {
 	char digest[SWITCH_MD5_DIGEST_STRING_SIZE] = { 0 };
 	char *sql, *name_dup, *p;
+    char outbound_count[80] = "";
+    callback_t cbt = { 0 };
 	fifo_node_t *node = NULL;
 
 	if (!fifo_name) return;
@@ -4274,8 +4269,6 @@ static void fifo_member_add(char *fifo_name, char *originate_string, int simo_co
 	}
 	switch_mutex_unlock(globals.mutex);
 
-	node->has_outbound = 1;
-
 	name_dup = strdup(fifo_name);
 	if ((p = strchr(name_dup, '@'))) {
 		*p = '\0';
@@ -4292,6 +4285,17 @@ static void fifo_member_add(char *fifo_name, char *originate_string, int simo_co
 	free(sql);
 	free(name_dup);
 
+    cbt.buf = outbound_count; 
+    cbt.len = sizeof(outbound_count);
+    sql = switch_mprintf("select count(*) from fifo_outbound where fifo_name = '%q'", fifo_name);
+    fifo_execute_sql_callback(globals.sql_mutex, sql, sql2str_callback, &cbt);
+    node->member_count = atoi(outbound_count);
+    if (node->member_count > 0) {
+        node->has_outbound = 1;
+    } else {
+        node->has_outbound = 0;
+    }
+    switch_safe_free(sql);
 }
 
 static void fifo_member_del(char *fifo_name, char *originate_string)
@@ -4327,10 +4331,11 @@ static void fifo_member_del(char *fifo_name, char *originate_string)
 	cbt.len = sizeof(outbound_count);
 	sql = switch_mprintf("select count(*) from fifo_outbound where fifo_name = '%q'", node->name);
 	fifo_execute_sql_callback(globals.sql_mutex, sql, sql2str_callback, &cbt);
-	if (atoi(outbound_count) > 0) {
-			node->has_outbound = 1;
+    node->member_count = atoi(outbound_count);
+	if (node->member_count > 0) {
+        node->has_outbound = 1;
 	} else {
-			node->has_outbound = 0;
+        node->has_outbound = 0;
 	}
 	switch_safe_free(sql);
 }

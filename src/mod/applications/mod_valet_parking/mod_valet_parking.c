@@ -46,6 +46,7 @@ typedef struct {
 	char uuid[SWITCH_UUID_FORMATTED_LENGTH + 1];
 	time_t timeout;
 	int bridged;
+	time_t start_time;
 } valet_token_t;
 
 typedef struct {
@@ -153,6 +154,34 @@ static void check_timeouts(void)
 
 }
 
+static int find_longest(valet_lot_t *lot, int min, int max)
+{
+
+	switch_hash_index_t *i_hi;
+	const void *i_var;
+	void *i_val;
+	valet_token_t *token;
+	int longest = 0, cur = 0, longest_ext = 0;
+	time_t now = switch_epoch_time_now(NULL);
+
+	switch_mutex_lock(lot->mutex);
+	for (i_hi = switch_hash_first(NULL, lot->hash); i_hi; i_hi = switch_hash_next(i_hi)) {
+		int i;
+		switch_hash_this(i_hi, &i_var, NULL, &i_val);
+		token = (valet_token_t *) i_val;
+		cur = (now - token->start_time);
+		i = atoi(token->ext);
+		
+		if (cur > longest && i >= min && i <= max) {
+			longest = cur;
+			longest_ext = i;
+		}
+	}
+	switch_mutex_unlock(lot->mutex);
+
+	return longest_ext;
+}
+
 static valet_token_t *next_id(switch_core_session_t *session, valet_lot_t *lot, int min, int max, int in)
 {
 	int i, r = 0;
@@ -164,10 +193,26 @@ static valet_token_t *next_id(switch_core_session_t *session, valet_lot_t *lot, 
 	}
 
 	switch_mutex_lock(globals.mutex);
+
+	if (!in) {
+		int longest = find_longest(lot, min, max);
+		if (longest > 0) {
+			switch_snprintf(buf, sizeof(buf), "%d", longest);
+			switch_mutex_lock(lot->mutex);
+			token = (valet_token_t *) switch_core_hash_find(lot->hash, buf);
+			switch_mutex_unlock(lot->mutex);
+			if (token) {
+				goto end;
+			}
+		}
+	}
+
 	for (i = min; (i < max || max == 0); i++) {
 		switch_snprintf(buf, sizeof(buf), "%d", i);
+		switch_mutex_lock(lot->mutex);
 		token = (valet_token_t *) switch_core_hash_find(lot->hash, buf);
-		
+		switch_mutex_unlock(lot->mutex);
+
 		if ((!in && token && !token->timeout)) {
 			goto end;
 		}
@@ -185,7 +230,10 @@ static valet_token_t *next_id(switch_core_session_t *session, valet_lot_t *lot, 
 		switch_zmalloc(token, sizeof(*token));
 		switch_set_string(token->uuid, switch_core_session_get_uuid(session));
 		switch_set_string(token->ext, buf);
+		token->start_time = switch_epoch_time_now(NULL);
+		switch_mutex_lock(lot->mutex);
 		switch_core_hash_insert(lot->hash, buf, token);
+		switch_mutex_unlock(lot->mutex);
 	}
 
  end:
@@ -327,6 +375,24 @@ static void valet_send_presence(const char *lot_name, valet_lot_t *lot, valet_to
 						
 }
 
+struct read_frame_data {
+	const char *dp;
+	const char *exten;
+	const char *context;
+	long to;
+};
+
+static switch_status_t read_frame_callback(switch_core_session_t *session, switch_frame_t *frame, void *user_data)
+{
+	struct read_frame_data *rf = (struct read_frame_data *) user_data;
+
+	if (--rf->to <= 0) {
+		rf->to = -1;
+		return SWITCH_STATUS_FALSE;
+	}
+	
+	return SWITCH_STATUS_SUCCESS;
+}
 
 #define VALET_APP_SYNTAX "<lotname> <extension>|[ask [<min>] [<max>] [<to>] [<prompt>]|auto in [min] [max]]"
 SWITCH_STANDARD_APP(valet_parking_function)
@@ -339,7 +405,8 @@ SWITCH_STANDARD_APP(valet_parking_function)
 	int is_auto = 0, play_announce = 1;
 	const char *var;
 	valet_token_t *token = NULL;
-
+	struct read_frame_data rf = { 0 };
+	long to_val = 0;
 
 	check_timeouts();
 
@@ -453,7 +520,7 @@ SWITCH_STANDARD_APP(valet_parking_function)
 				switch_mutex_unlock(lot->mutex);
 			}
 
-			if (token) {
+			if (token && !token->bridged) {
 				switch_core_session_t *b_session;
 			
 				if (token->timeout) {
@@ -483,19 +550,28 @@ SWITCH_STANDARD_APP(valet_parking_function)
 						switch_core_session_rwunlock(b_session);
 						token->timeout = 0;
 						token->bridged = 1;
-
+						
 						switch_ivr_uuid_bridge(switch_core_session_get_uuid(session), token->uuid);
+
 						return;
 					}
 				}
 			}
 
-			token = NULL;
-
-			switch_zmalloc(token, sizeof(*token));
+			if (token) {
+				switch_mutex_lock(lot->mutex);
+				switch_core_hash_delete(lot->hash, token->ext);
+				switch_mutex_unlock(lot->mutex);
+				memset(token, 0, sizeof(*token));
+			} else {
+				switch_zmalloc(token, sizeof(*token));
+			}
 			switch_set_string(token->uuid, switch_core_session_get_uuid(session));
 			switch_set_string(token->ext, ext);
+			token->start_time = switch_epoch_time_now(NULL);
+			switch_mutex_lock(lot->mutex);
 			switch_core_hash_insert(lot->hash, ext, token);
+			switch_mutex_unlock(lot->mutex);
 		}
 
 		if (!(tmp = switch_channel_get_variable(channel, "valet_hold_music"))) {
@@ -550,14 +626,48 @@ SWITCH_STANDARD_APP(valet_parking_function)
 		}
 
 		valet_send_presence(lot_name, lot, token, SWITCH_TRUE);
-		
+
+		if ((rf.exten = switch_channel_get_variable(channel, "valet_parking_orbit_exten"))) {
+			to_val = 60;
+		}
+
+		if ((var = switch_channel_get_variable(channel, "valet_parking_timeout"))) {
+			long tmp = atol(var);
+
+			if (tmp > 0) {
+				to_val = tmp;
+			}
+		}
+	
+		if (to_val) {
+			switch_codec_implementation_t read_impl;
+			switch_core_session_get_read_impl(session, &read_impl);
+			
+			rf.to = (1000 / (read_impl.microseconds_per_packet / 1000)) * to_val;
+			rf.dp = switch_channel_get_variable(channel, "valet_parking_orbit_dialplan");
+			rf.context = switch_channel_get_variable(channel, "valet_parking_orbit_context");
+		}
+
 
 		args.input_callback = valet_on_dtmf;
 		args.buf = dbuf;
 		args.buflen = sizeof(dbuf);
 
+		if (rf.to) {
+			args.read_frame_callback = read_frame_callback;
+			args.user_data = &rf;
+		}
+
 		while(switch_channel_ready(channel)) {
 			switch_status_t pstatus = switch_ivr_play_file(session, NULL, music, &args);
+
+			if (rf.to == -1) {
+				if (!zstr(rf.exten)) {
+					switch_ivr_session_transfer(session, rf.exten, rf.dp, rf.context);
+				}
+				break;
+			}
+
 			if (pstatus == SWITCH_STATUS_BREAK || pstatus == SWITCH_STATUS_TIMEOUT) {
 				break;
 			}
@@ -615,6 +725,7 @@ SWITCH_STANDARD_API(valet_info_function)
 
 		stream->write_function(stream, "  <lot name=\"%s\">\n", name);
 
+		switch_mutex_lock(lot->mutex);
 		for (i_hi = switch_hash_first(NULL, lot->hash); i_hi; i_hi = switch_hash_next(i_hi)) {
 			valet_token_t *token;
 
@@ -626,6 +737,8 @@ SWITCH_STANDARD_API(valet_info_function)
 				stream->write_function(stream, "    <extension uuid=\"%s\">%s</extension>\n", token->uuid, i_ext);
 			}
 		}
+		switch_mutex_unlock(lot->mutex);
+
 		stream->write_function(stream, "  </lot>\n");
 	}
 

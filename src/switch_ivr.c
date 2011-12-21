@@ -561,8 +561,20 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_parse_event(switch_core_session_t *se
 					if (stream && switch_is_moh(stream)) {
 						if ((b_session = switch_core_session_locate(b_uuid))) {
 							switch_channel_t *b_channel = switch_core_session_get_channel(b_session);
+							switch_status_t st;
+							
 							switch_ivr_broadcast(b_uuid, stream, SMF_ECHO_ALEG | SMF_LOOP);
-							switch_channel_wait_for_flag(b_channel, CF_BROADCAST, SWITCH_TRUE, 5000, NULL);
+							st = switch_channel_wait_for_flag(b_channel, CF_BROADCAST, SWITCH_TRUE, 5000, NULL);
+							if (st != SWITCH_STATUS_SUCCESS && 
+								switch_channel_ready(channel) && switch_channel_ready(b_channel) && !switch_channel_test_flag(b_channel, CF_BROADCAST)) {
+								switch_core_session_kill_channel(b_session, SWITCH_SIG_BREAK);
+								st = switch_channel_wait_for_flag(b_channel, CF_BROADCAST, SWITCH_TRUE, 5000, NULL);
+							
+								if (st != SWITCH_STATUS_SUCCESS && 
+									switch_channel_ready(channel) && switch_channel_ready(b_channel) && !switch_channel_test_flag(b_channel, CF_BROADCAST)) {
+									switch_core_session_flush_private_events(b_session);
+								}
+							}
 							switch_core_session_rwunlock(b_session);
 						}
 					} else {
@@ -1704,7 +1716,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_session_transfer(switch_core_session_
 														   (long) switch_epoch_time_now(NULL), new_profile->uuid_str,
 														   extension, use_context, use_dialplan);
 		switch_channel_add_variable_var_check(channel, SWITCH_TRANSFER_HISTORY_VARIABLE, new_profile->transfer_source, SWITCH_FALSE, SWITCH_STACK_PUSH);
-		
+		switch_channel_set_variable(channel, SWITCH_TRANSFER_SOURCE_VARIABLE, new_profile->transfer_source);
 		return SWITCH_STATUS_SUCCESS;
 	}
 
