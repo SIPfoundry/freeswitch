@@ -467,7 +467,7 @@ ASR_TTS_MODULES="asr_tts/mod_pocketsphinx asr_tts/mod_flite asr_tts/mod_unimrcp"
 #
 ######################################################################################################################
 CODECS_MODULES="codecs/mod_bv codecs/mod_h26x codecs/mod_speex codecs/mod_celt codecs/mod_codec2 codecs/mod_ilbc \
-		        codecs/mod_mp4v codecs/mod_opus codecs/mod_silk codecs/mod_siren codecs/mod_theora "
+		        codecs/mod_mp4v codecs/mod_opus codecs/mod_silk codecs/mod_siren codecs/mod_theora codecs/mod_isac "
 #
 %if %{build_sng_tc}
 CODECS_MODULES+="codecs/mod_sangoma_codec"
@@ -536,7 +536,7 @@ SAY_MODULES="say/mod_say_de say/mod_say_en say/mod_say_fr say/mod_say_he say/mod
 #							Timers
 #
 ######################################################################################################################
-TIMERS_MODULES=
+TIMERS_MODULES="timers/mod_timerfd"
 ######################################################################################################################
 #
 #						XML Modules
@@ -943,6 +943,7 @@ fi
 %{prefix}/mod/mod_http_cache.so*
 %{prefix}/mod/mod_h26x.so*
 %{prefix}/mod/mod_ilbc.so*
+%{prefix}/mod/mod_isac.so*
 %{prefix}/mod/mod_lcr.so*
 %{prefix}/mod/mod_limit.so*
 %{prefix}/mod/mod_local_stream.so*
@@ -974,6 +975,7 @@ fi
 %{prefix}/mod/mod_stress.so*
 %{prefix}/mod/mod_syslog.so*
 %{prefix}/mod/mod_theora.so*
+%{prefix}/mod/mod_timerfd.so*
 %{prefix}/mod/mod_tone_stream.so*
 %{prefix}/mod/mod_unimrcp.so*
 %{prefix}/mod/mod_valet_parking.so*
