@@ -510,7 +510,7 @@ SAY_MODULES="say/mod_say_de say/mod_say_en say/mod_say_fr say/mod_say_ru"
 #							Timers
 #
 ######################################################################################################################
-TIMERS_MODULES=
+TIMERS_MODULES="timers/mod_posix_timer"
 ######################################################################################################################
 #
 #						XML Modules
@@ -904,6 +904,7 @@ fi
 %{prefix}/mod/mod_pocketsphinx.so*
 %{prefix}/mod/mod_portaudio.so*
 %{prefix}/mod/mod_portaudio_stream.so*
+%{prefix}/mod/mod_posix_timer.so*
 %{prefix}/mod/mod_redis.so*
 %{prefix}/mod/mod_rss.so*
 %{prefix}/mod/mod_shout.so*
