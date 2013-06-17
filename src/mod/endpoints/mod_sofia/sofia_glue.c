@@ -3234,6 +3234,11 @@ switch_status_t sofia_glue_activate_rtp(private_object_t *tech_pvt, switch_rtp_f
 			}
 			goto video;
 		} else {
+			/* Hack for sipXbridge */
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), SWITCH_LOG_DEBUG, "Using private IP for media endpoint (**hack for sipXbridge**)\n");
+			tech_pvt->remote_sdp_audio_ip = strdup(remote_host);
+			tech_pvt->remote_sdp_audio_port = remote_port;
+			
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), SWITCH_LOG_DEBUG, "Audio params changed for %s from %s:%d to %s:%d\n",
 							  switch_channel_get_name(tech_pvt->channel),
 							  remote_host, remote_port, tech_pvt->remote_sdp_audio_ip, tech_pvt->remote_sdp_audio_port);
