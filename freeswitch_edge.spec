@@ -1,3 +1,33 @@
+######################################################################################################################
+#
+# spec file for package freeswitch
+#
+# includes module(s): freeswitch-devel freeswitch-codec-passthru-amr freeswitch-codec-passthru-amrwb freeswitch-codec-passthru-g729 
+#                     freeswitch-codec-passthru-g7231 freeswitch-lua freeswitch-perl freeswitch-python freeswitch-spidermonkey freeswitch-v8
+#                     freeswitch-lan-de freeswitch-lang-en freeswitch-lang-fr freeswitch-lang-hu freeswitch-lang-ru freeswitch-freetdm
+#
+# Initial Version Copyright (C) 2007 Peter Nixon and Michal Bielicki, All Rights Reserved.
+#
+# This file is part of:
+# FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
+# Copyright (C) 2005-2014, Anthony Minessale II <anthm@freeswitch.org>
+#
+# This file and all modifications and additions to the pristine package are under the same license as the package itself.
+#
+# Contributor(s): Mike Jerris
+#                 Brian West
+#                 Anthony Minessale II <anthm@freeswitch.org>
+#                 Raul Fragoso
+#                 Rupa Shomaker
+#                 Marc Olivier Chouinard
+#                 Raymond Chandler
+#                 Ken Rice <krice@freeswitch.org>
+#                 Chris Rienzo <crienzo@grasshopper.com>
+#
+# Maintainer(s): Ken Rice <krice@freeswitch.org>
+#
+######################################################################################################################
+
 %define version %{version_no}
 %define release %{build_no}
 %define prefix %{install_prefix} 
