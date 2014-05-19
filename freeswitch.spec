@@ -103,7 +103,7 @@ Summary:      	FreeSWITCH open source telephony platform
 License:      	MPL1.1
 Group:        	Productivity/Telephony/Servers
 Version:	%{version}
-Release:	%{release}%{?dist}
+Release:	%{release}
 URL:          	http://www.freeswitch.org/
 Packager:     	Ken Rice
 Vendor:       	http://www.freeswitch.org/
@@ -162,6 +162,8 @@ BuildRequires: termcap
 BuildRequires: unixODBC-devel
 BuildRequires: gdbm-devel
 BuildRequires: db4-devel
+BuildRequires: pcre-devel
+BuildRequires: speex-devel
 BuildRequires: python-devel
 BuildRequires: libogg-devel
 BuildRequires: libvorbis-devel
@@ -984,16 +986,6 @@ Rayo 3PCC for FreeSWITCH.  http://rayo.org   http://xmpp.org/extensions/xep-0327
 Rayo is an XMPP protocol extension for third-party control of telephone calls.
 %endif
 
-%package event-snmp
-Summary:	SNMP stats reporter for the FreeSWITCH open source telephony platform
-Group:		System/Libraries
-Requires:	%{name} = %{version}-%{release}
-Requires:	net-snmp
-BuildRequires:	net-snmp-devel
-
-%description event-snmp
-SNMP stats reporter for the FreeSWITCH open source telephony platform
-
 ######################################################################################################################
 #				FreeSWITCH Media Format Modules
 ######################################################################################################################
@@ -1405,8 +1397,7 @@ ENDPOINTS_MODULES="endpoints/mod_dingaling ../../libs/freetdm/mod_freetdm \
 ######################################################################################################################
 EVENT_HANDLERS_MODULES="event_handlers/mod_cdr_csv event_handlers/mod_cdr_pg_csv event_handlers/mod_cdr_sqlite \
 			event_handlers/mod_cdr_mongodb event_handlers/mod_erlang_event event_handlers/mod_event_multicast \
-			event_handlers/mod_event_socket event_handlers/mod_json_cdr \
-			event_handlers/mod_snmp"
+			event_handlers/mod_event_socket event_handlers/mod_json_cdr"
 %if %{build_mod_rayo}
 EVENT_HANDLERS_MODULES+=" event_handlers/mod_rayo"
 %endif
@@ -2150,9 +2141,6 @@ fi
 %files event-rayo 
 %{MODINSTDIR}/mod_rayo.so*
 %endif
-
-%files event-snmp
-%{MODINSTDIR}/mod_snmp.so*
 
 ######################################################################################################################
 #
