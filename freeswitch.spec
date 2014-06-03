@@ -3,7 +3,7 @@
 # spec file for package freeswitch
 #
 # includes module(s): freeswitch-devel freeswitch-codec-passthru-amr freeswitch-codec-passthru-amrwb freeswitch-codec-passthru-g729 
-#                     freeswitch-codec-passthru-g7231 freeswitch-lua freeswitch-perl freeswitch-python freeswitch-spidermonkey freeswitch-v8
+#                     freeswitch-codec-passthru-g7231 freeswitch-lua freeswitch-perl freeswitch-python freeswitch-v8
 #                     freeswitch-lan-de freeswitch-lang-en freeswitch-lang-fr freeswitch-lang-hu freeswitch-lang-ru freeswitch-freetdm
 #		      and others
 #
@@ -151,7 +151,11 @@ BuildRequires: gcc-c++
 BuildRequires: gnutls-devel
 BuildRequires: libtool >= 1.5.17
 BuildRequires: ncurses-devel
-BuildRequires: openssl-devel
+BuildRequires: openssl-devel >= 1.0.1e
+BuildRequires: pcre-devel 
+BuildRequires: speex-devel 
+BuildRequires: sqlite-devel
+BuildRequires: libedit-devel
 BuildRequires: perl
 %if 0%{?fedora_version} >= 8 || 0%{?rhel} >= 6
 BuildRequires: perl-ExtUtils-Embed
@@ -189,7 +193,11 @@ Requires: libogg
 Requires: libvorbis
 Requires: curl
 Requires: ncurses
-Requires: openssl
+Requires: pcre
+Requires: speex
+Requires: sqlite
+Requires: libedit
+Requires: openssl >= 1.0.1e
 Requires: unixODBC
 Requires: libjpeg
 #Requires: openldap
@@ -2309,6 +2317,8 @@ fi
 #
 ######################################################################################################################
 %changelog
+* Fri Jun 02 2014 - krice@freeswitch.org
+- remove mod_spidermoney as its been deprecated
 * Fri Feb 21 2014 - crienzo@grasshopper.com
 - change file owner to root
 * Wed Feb 19 2014 - crienzo@grasshopper.com
