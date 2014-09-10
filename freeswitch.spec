@@ -184,6 +184,9 @@ BuildRequires: e2fsprogs-devel
 BuildRequires: libtheora-devel
 BuildRequires: libxml2-devel
 BuildRequires: bison
+BuildRequires: net-snmp-devel
+BuildRequires: libmemcached-devel
+BuildRequires: portaudio-devel
 %if %{build_py26_esl}
 BuildRequires: python26-devel
 Requires: python26
