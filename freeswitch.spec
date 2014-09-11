@@ -173,7 +173,11 @@ BuildRequires: libedit-devel
 BuildRequires: libmemcached-devel
 BuildRequires: unixODBC-devel
 BuildRequires: gdbm-devel
+%if 0%{?suse_version} > 100
+BuildRequires: db-devel
+%else
 BuildRequires: db4-devel
+%endif
 BuildRequires: python-devel
 BuildRequires: libogg-devel
 BuildRequires: libvorbis-devel
