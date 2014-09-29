@@ -1841,7 +1841,6 @@ fi
 #							Sip Profiles
 ######################################################################################################################
 %config(noreplace) %attr(0640, freeswitch, daemon) %{sysconfdir}/sip_profiles/*.xml
-%config(noreplace) %attr(0640, freeswitch, daemon) %{sysconfdir}/sip_profiles/internal/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{sysconfdir}/sip_profiles/external/*.xml
 ######################################################################################################################
 #				Other Protocol Profiles (skinny, jingle, mrcp)
