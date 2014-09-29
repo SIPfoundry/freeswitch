@@ -1673,6 +1673,7 @@ fi
 %dir %attr(0750, freeswitch, daemon) %{sysconfdir}/mrcp_profiles
 %dir %attr(0750, freeswitch, daemon) %{sysconfdir}/sip_profiles
 %dir %attr(0750, freeswitch, daemon) %{sysconfdir}/sip_profiles/external
+%dir %attr(0750, freeswitch, daemon) %{sysconfdir}/sip_profiles/external-ipv6
 %dir %attr(0750, freeswitch, daemon) %{sysconfdir}/skinny_profiles
 #
 #################################### Grammar Directory Structure #####################################################
@@ -1842,6 +1843,7 @@ fi
 ######################################################################################################################
 %config(noreplace) %attr(0640, freeswitch, daemon) %{sysconfdir}/sip_profiles/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{sysconfdir}/sip_profiles/external/*.xml
+%config(noreplace) %attr(0640, freeswitch, daemon) %{sysconfdir}/sip_profiles/external-ipv6/*.xml
 ######################################################################################################################
 #				Other Protocol Profiles (skinny, jingle, mrcp)
 ######################################################################################################################
