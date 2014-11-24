@@ -2066,7 +2066,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 			char *parsed = NULL;
 
 			if (switch_event_create_brackets(data, '<', '>', ',', &var_event, &parsed, SWITCH_FALSE) != SWITCH_STATUS_SUCCESS || !parsed) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Parse Error!\n");
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Parse Error while parsing [%s] unparsed-data=[%s]\n", bridgeto, data);
 				switch_goto_status(SWITCH_STATUS_GENERR, done);
 			}
 			
@@ -2080,7 +2080,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 		char *parsed = NULL;
 
 		if (switch_event_create_brackets(data, '{', '}', ',', &var_event, &parsed, SWITCH_FALSE) != SWITCH_STATUS_SUCCESS || !parsed) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Parse Error!\n");
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Parse Error while parsing [%s] unparsed-data=[%s]\n", bridgeto, data);
 			switch_goto_status(SWITCH_STATUS_GENERR, done);
 		}
 
