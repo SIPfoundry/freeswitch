@@ -48,23 +48,23 @@
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(ProjectDir)..\..\build\props\unirelease.props" />
-    <Import Project="$(ProjectDir)..\..\build\props\mpf.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\unirelease.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\mpf.props" />
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(ProjectDir)..\..\build\props\unidebug.props" />
-    <Import Project="$(ProjectDir)..\..\build\props\mpf.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\unidebug.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\mpf.props" />
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(ProjectDir)..\..\build\props\unirelease.props" />
-    <Import Project="$(ProjectDir)..\..\build\props\mpf.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\unirelease.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\mpf.props" />
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(ProjectDir)..\..\build\props\unidebug.props" />
-    <Import Project="$(ProjectDir)..\..\build\props\mpf.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\unidebug.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\mpf.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
@@ -127,7 +127,6 @@
     <ClCompile Include="src\mpf_dtmf_generator.c" />
     <ClCompile Include="src\mpf_encoder.c" />
     <ClCompile Include="src\mpf_engine.c" />
-    <ClCompile Include="src\mpf_engine_factory.c" />
     <ClCompile Include="src\mpf_file_termination_factory.c" />
     <ClCompile Include="src\mpf_frame_buffer.c" />
     <ClCompile Include="src\mpf_jitter_buffer.c" />

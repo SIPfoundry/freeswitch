@@ -40,8 +40,5 @@
     <ClCompile Include="src\mrcp_server_connection.c">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="src\mrcp_ca_factory.c">
-      <Filter>src</Filter>
-    </ClCompile>
   </ItemGroup>
 </Project>

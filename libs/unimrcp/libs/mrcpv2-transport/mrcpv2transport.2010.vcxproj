@@ -48,23 +48,23 @@
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(ProjectDir)..\..\build\props\unirelease.props" />
-    <Import Project="$(ProjectDir)..\..\build\props\mrcpv2transport.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\unirelease.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\mrcpv2transport.props" />
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(ProjectDir)..\..\build\props\unidebug.props" />
-    <Import Project="$(ProjectDir)..\..\build\props\mrcpv2transport.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\unidebug.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\mrcpv2transport.props" />
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(ProjectDir)..\..\build\props\unirelease.props" />
-    <Import Project="$(ProjectDir)..\..\build\props\mrcpv2transport.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\unirelease.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\mrcpv2transport.props" />
   </ImportGroup>
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="$(ProjectDir)..\..\build\props\unidebug.props" />
-    <Import Project="$(ProjectDir)..\..\build\props\mrcpv2transport.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\unidebug.props" />
+    <Import Project="$(ProjectDir)..\..\build\vsprops\mrcpv2transport.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
@@ -113,7 +113,6 @@
     <ClInclude Include="include\mrcp_server_connection.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\mrcp_ca_factory.c" />
     <ClCompile Include="src\mrcp_client_connection.c" />
     <ClCompile Include="src\mrcp_connection.c" />
     <ClCompile Include="src\mrcp_control_descriptor.c" />
