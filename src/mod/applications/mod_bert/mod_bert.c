@@ -216,8 +216,6 @@ SWITCH_STANDARD_APP(bert_test_function)
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Failed to step on timer!\n");
 				break;
 			}
-			/* the playback() app does not set write_frame.timestamp unless a timer is used, what's the catch? does it matter? */
-			write_frame.timestamp = bert.timer.samplecount;
 		}
 
 		if (bert.output_debug_f) {
