@@ -395,7 +395,6 @@ char *sip_header_as_string(su_home_t *home, sip_header_t const *h)
 {
   ssize_t len;
   char *rv, s[256];
-  ssize_t n;
 
   if (h == NULL)
     return NULL;
@@ -414,7 +413,7 @@ char *sip_header_as_string(su_home_t *home, sip_header_t const *h)
        rv;
        rv = su_realloc(home, rv, len)) {
 	memset(rv,0,len);
-    n = sip_header_field_e(rv, len, h, 0);
+    ssize_t n = sip_header_field_e(rv, len, h, 0);
     if (n > -1 && n + 1 <= len)
       break;
     if (n > -1)			/* glibc >2.1 */
