@@ -670,7 +670,6 @@ static switch_status_t shout_file_open(switch_file_handle_t *handle, const char 
 			context->stream_url = switch_core_sprintf(context->memory_pool, "http://%s", path);
 			context->prebuf = handle->prebuf;
 			launch_read_stream_thread(context);
-			switch_cond_next();
 		} else {
 			handle->seekable = 1;
 			if (mpg123_param(context->mh, MPG123_FLAGS, MPG123_MONO_MIX, 0) != MPG123_OK) {
@@ -683,25 +682,6 @@ static switch_status_t shout_file_open(switch_file_handle_t *handle, const char 
 			}
 
 		}
-
-		if (handle->handler) {
-			int sanity = 1000;
-
-			while(--sanity > 0 && !switch_buffer_inuse(context->audio_buffer)) {
-				switch_yield(20000);
-			}
-
-			if (!sanity) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error opening %s (data stream timeout)\n", path);
-				goto error;
-			}
-		}
-
-		if (!channels || !rate) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error opening %s (invalid rate or channel count)\n", path);
-			goto error;
-		}
-
 	} else if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
 		if (!(context->gfp = lame_init())) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Could not allocate lame\n");
