@@ -67,7 +67,6 @@ static switch_status_t silence_stream_file_open(switch_file_handle_t *handle, co
 		}
 	}
 
-	handle->channels = 1;
 	handle->private_info = sh;
 
 	return SWITCH_STATUS_SUCCESS;
@@ -153,8 +152,6 @@ static switch_status_t tone_stream_file_open(switch_file_handle_t *handle, const
 	if (!handle->samplerate) {
 		handle->samplerate = 8000;
 	}
-
-	handle->channels = 1;
 
 	teletone_init_session(&ts, 0, teletone_handler, audio_buffer);
 	ts.rate = handle->samplerate;
